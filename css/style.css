@@ -16,8 +16,8 @@
    ========================================================================== */
 html,
 html[data-theme='dark'] {
-  --bg-main: #000000;
-  --shell-bg: #000000;
+  --bg-main: #1b222d;
+  --shell-bg: #1b222d;
   --bg-card: #1c1c1e;
   --bg-card-hover: #26262a;
   --bg-subtle: rgba(255, 255, 255, 0.08);
@@ -2474,18 +2474,18 @@ html {
 }
 
 /* ==========================================================================
-   APP SPLASH SCREEN (초기 로딩 스플래시 화면)
+   APP SPLASH SCREEN (초기 로딩 스플래시 화면 - 무검정/무텍스트 깔끔 3D)
    ========================================================================== */
 .splash-screen {
   position: fixed;
   inset: 0;
   z-index: 99999;
-  background: var(--bg-main);
+  background: #1b222d;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  transition: opacity 0.4s ease, visibility 0.4s ease;
+  transition: opacity 0.35s ease, visibility 0.35s ease;
 }
 
 .splash-screen.fade-out {
@@ -2498,20 +2498,17 @@ html {
   display: flex;
   flex-direction: column;
   align-items: center;
-  text-align: center;
-  max-width: 320px;
-  width: 100%;
+  justify-content: center;
 }
 
 .splash-icon-wrapper {
   position: relative;
-  width: 112px;
-  height: 112px;
-  border-radius: 28px;
+  width: 140px;
+  height: 140px;
+  border-radius: 36px;
   overflow: hidden;
-  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border-color);
-  margin-bottom: 22px;
-  animation: splashPulse 2.2s ease-in-out infinite;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  animation: splashFloat 2.4s ease-in-out infinite;
 }
 
 .splash-icon {
@@ -2521,47 +2518,7 @@ html {
   display: block;
 }
 
-.splash-title {
-  font-size: 1.55rem;
-  font-weight: 800;
-  color: var(--text-main);
-  letter-spacing: -0.5px;
-  margin-bottom: 4px;
-}
-
-.splash-subtitle {
-  font-size: 0.86rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  margin-bottom: 30px;
-}
-
-.splash-loader {
-  width: 140px;
-  height: 4px;
-  background: var(--bg-subtle);
-  border-radius: 2px;
-  overflow: hidden;
-  position: relative;
-}
-
-.splash-loader-bar {
-  width: 45%;
-  height: 100%;
-  background: var(--primary);
-  border-radius: 2px;
-  position: absolute;
-  left: -45%;
-  animation: splashLoading 1.4s ease-in-out infinite;
-}
-
-@keyframes splashPulse {
-  0%, 100% { transform: scale(1); box-shadow: 0 18px 45px rgba(0, 0, 0, 0.55); }
-  50% { transform: scale(1.04); box-shadow: 0 22px 55px rgba(0, 0, 0, 0.7), 0 0 24px rgba(255, 255, 255, 0.12); }
-}
-
-@keyframes splashLoading {
-  0% { left: -45%; width: 30%; }
-  50% { left: 35%; width: 55%; }
-  100% { left: 100%; width: 30%; }
+@keyframes splashFloat {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-8px) scale(1.03); }
 }

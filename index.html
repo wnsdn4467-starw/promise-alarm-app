@@ -7,15 +7,17 @@
 
   <!-- PWA Manifest & Mobile App Support -->
   <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#000000">
+  <meta name="theme-color" content="#1b222d">
+  <style>
+    html, body { background-color: #1b222d !important; }
+  </style>
   <script>
-    // 첫 페인트 전에 테마를 적용해 깜빡임을 막는다. (기본: 다크)
     (function () {
       try {
-        var t = localStorage.getItem('pa_theme') === 'light' ? 'light' : 'dark';
-        document.documentElement.setAttribute('data-theme', t);
+        var bg = '#1b222d';
+        document.documentElement.style.backgroundColor = bg;
         var m = document.querySelector('meta[name="theme-color"]');
-        if (m) m.setAttribute('content', t === 'light' ? '#ffffff' : '#000000');
+        if (m) m.setAttribute('content', bg);
       } catch (e) {}
     })();
   </script>
@@ -35,8 +37,8 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <link rel="stylesheet" href="css/style.css?v=70">
-  <link rel="stylesheet" href="css/enhance.css?v=70">
+  <link rel="stylesheet" href="css/style.css?v=71">
+  <link rel="stylesheet" href="css/enhance.css?v=71">
 
   <!-- Official Google Identity Services & Apple ID Auth SDKs -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -49,16 +51,11 @@
 </head>
 <body>
 
-  <!-- App Splash Screen (초기 로딩 화면) -->
+  <!-- App Splash Screen (초기 로딩 화면 - 텍스트 없이 3D 아이콘만 깔끔하게) -->
   <div id="appSplashScreen" class="splash-screen">
     <div class="splash-content">
       <div class="splash-icon-wrapper">
-        <img src="images/app_icon.png" alt="세이피 앱 아이콘" class="splash-icon">
-      </div>
-      <h2 class="splash-title">세이피</h2>
-      <p class="splash-subtitle">약속 &amp; 실시간 위치 공유</p>
-      <div class="splash-loader">
-        <div class="splash-loader-bar"></div>
+        <img src="images/app_icon.png" alt="세이피" class="splash-icon">
       </div>
     </div>
   </div>
