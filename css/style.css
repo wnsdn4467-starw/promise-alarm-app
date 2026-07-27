@@ -2474,13 +2474,13 @@ html {
 }
 
 /* ==========================================================================
-   APP SPLASH SCREEN (초기 로딩 스플래시 화면 - 무검정/무텍스트 깔끔 3D)
+   APP SPLASH SCREEN (초기 로딩 스플래시 화면 - 무검정/무텍스트 화이트 3D)
    ========================================================================== */
 .splash-screen {
   position: fixed;
   inset: 0;
   z-index: 99999;
-  background: #1b222d;
+  background: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2503,11 +2503,11 @@ html {
 
 .splash-icon-wrapper {
   position: relative;
-  width: 140px;
-  height: 140px;
+  width: 144px;
+  height: 144px;
   border-radius: 36px;
   overflow: hidden;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 18px 45px rgba(147, 51, 234, 0.18), 0 8px 24px rgba(0, 0, 0, 0.06);
   animation: splashFloat 2.4s ease-in-out infinite;
 }
 

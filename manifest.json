@@ -6,8 +6,8 @@
   "scope": "./",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#1b222d",
-  "theme_color": "#1b222d",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
   "lang": "ko-KR",
   "categories": ["lifestyle", "utilities", "productivity"],
   "icons": [

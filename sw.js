@@ -1,5 +1,5 @@
 /* Service Worker for Promise App PWA Installation & Offline Support */
-const CACHE_VERSION = 'v80';
+const CACHE_VERSION = 'v90';
 const CACHE_NAME = `promise-app-${CACHE_VERSION}`;
 
 // 쿼리스트링(?v=) 없이 등록하고, 조회 시 ignoreSearch 로 매칭한다.
