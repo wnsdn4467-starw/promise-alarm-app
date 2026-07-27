@@ -4060,6 +4060,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!document.hidden) tickPromiseTimers();
   });
 
+  function hideSplashScreen() {
+    const splash = document.getElementById('appSplashScreen');
+    if (splash) {
+      setTimeout(() => {
+        splash.classList.add('fade-out');
+        setTimeout(() => {
+          if (splash.parentElement) splash.remove();
+        }, 450);
+      }, 650);
+    }
+  }
+
   // Initialize App
   initInstantGpsTracking();
   // initFirebaseRealtimeDB() is now called earlier (before getRedirectResult)
@@ -4067,4 +4079,5 @@ document.addEventListener('DOMContentLoaded', () => {
   renderAll();
   evaluatePenaltyState();
   tickPromiseTimers();
+  hideSplashScreen();
 });
