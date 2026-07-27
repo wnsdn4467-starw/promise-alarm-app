@@ -38,7 +38,7 @@
       "$toCode": {
         ".read": "auth != null && root.child('uid_to_code').child(auth.uid).val() === $toCode",
         "$fromCode": {
-          ".write": "auth != null && (root.child('uid_to_code').child(auth.uid).val() === $toCode || (newData.exists() && newData.child('fromUid').val() === auth.uid))",
+          ".write": "auth != null && (root.child('uid_to_code').child(auth.uid).val() === $toCode || (newData.exists() && newData.child('fromUid').val() === auth.uid) || (!newData.exists() && root.child('uid_to_code').child(auth.uid).val() === $fromCode))",
           ".validate": "newData.hasChildren(['fromCode', 'fromUid', 'fromName'])"
         }
       }
@@ -49,16 +49,41 @@
         ".read": "auth != null && root.child('uid_to_code').child(auth.uid).val() === $ownerCode",
         ".write": "auth != null && root.child('uid_to_code').child(auth.uid).val() === $ownerCode",
         "$friendCode": {
-          ".write": "auth != null && newData.exists() && newData.child('uid').val() === auth.uid"
+          ".write": "auth != null && ((newData.exists() && newData.child('uid').val() === auth.uid) || (!newData.exists() && root.child('uid_to_code').child(auth.uid).val() === $friendCode))"
         }
       }
     },
 
     "promises": {
-      ".read": "auth != null",
       "$promiseId": {
-        ".write": "auth != null && (!data.exists() || !newData.exists() || !data.child('hostUid').exists() || data.child('hostUid').val() === newData.child('hostUid').val())",
-        ".validate": "newData.hasChildren(['id', 'title', 'participants'])"
+        ".read": "auth != null && data.child('members').child(auth.uid).exists()",
+
+        ".write": "auth != null && ((!data.exists() && newData.child('hostUid').val() === auth.uid && newData.child('members').child(auth.uid).exists()) || (data.exists() && data.child('hostUid').val() === auth.uid))",
+
+        ".validate": "newData.hasChildren(['id', 'title', 'hostUid', 'members'])",
+
+        "members": {
+          "$memberUid": {
+            ".validate": "newData.isBoolean() && newData.val() === true"
+          }
+        },
+
+        "attendees": {
+          "$memberUid": {
+            ".write": "auth != null && $memberUid === auth.uid && root.child('promises').child($promiseId).child('members').child(auth.uid).exists()",
+            ".validate": "!newData.exists() || (newData.hasChildren(['uid', 'name']) && newData.child('uid').val() === $memberUid && newData.child('name').isString())"
+          }
+        }
+      }
+    },
+
+    "user_promises": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$promiseId": {
+          ".write": "auth != null && (auth.uid === $uid || root.child('promises').child($promiseId).child('hostUid').val() === auth.uid)",
+          ".validate": "newData.isBoolean() && newData.val() === true"
+        }
       }
     }
   }

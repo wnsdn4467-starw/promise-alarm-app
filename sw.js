@@ -1,5 +1,5 @@
 /* Service Worker for Promise App PWA Installation & Offline Support */
-const CACHE_VERSION = 'v42';
+const CACHE_VERSION = 'v59';
 const CACHE_NAME = `promise-app-${CACHE_VERSION}`;
 
 // 쿼리스트링(?v=) 없이 등록하고, 조회 시 ignoreSearch 로 매칭한다.
@@ -54,6 +54,23 @@ self.addEventListener('fetch', (e) => {
           return res;
         })
         .catch(() => caches.match('./index.html', { ignoreSearch: true }))
+    );
+    return;
+  }
+
+  // 앱 코드(js/css)와 manifest: 네트워크 우선.
+  // 배포 직후 폰에서 옛 코드가 한 번 더 뜨는 문제를 막는다. (오프라인일 때만 캐시 사용)
+  if (/\.(js|css)$/i.test(url.pathname) || url.pathname.endsWith('/manifest.json')) {
+    e.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.status === 200 && res.type === 'basic') {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
+          }
+          return res;
+        })
+        .catch(() => caches.match(req, { ignoreSearch: true }))
     );
     return;
   }

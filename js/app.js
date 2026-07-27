@@ -148,12 +148,19 @@ document.addEventListener('DOMContentLoaded', () => {
   let activePromiseForMap = null;
   let selectedMapParticipant = null;
   let dbRef = null;
+
+  // 약속 구독 상태 (user_promises 색인 + promises/{id} 개별 리스너)
+  let promiseIndexRef = null;
+  let promiseNodeRefs = {};
+  let cloudPromisesMap = {};
+  let subscribedPromiseUid = null;
   let pendingSocialAuth = null;
 
   // 초기화 순서와 무관하게 접근되므로(초기화 중 콜백 등) 최상단에서 선언한다.
   let isCloudDataListening = false;
   let lastSyncedProfileJson = '';
   let arrivedNotified = loadStorage('pa_arrived_promises', []);
+  let declinedPromiseIds = loadStorage('pa_declined_promises', []);
 
   // ==========================================
   // 0. 위치 엔진
@@ -507,15 +514,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 약속은 promises/{promiseId} 단위로 분리 저장한다.
         // (과거 shared_promises 전역 배열 방식은 동시 사용 시 last-write-wins 로 유실됨)
-        // 프로필 동기화보다 먼저 등록해야, 프로필 단계에서 오류가 나도 약속 구독이 유지된다.
-        dbRef.ref('promises').on('value', (snapshot) => {
-          const cloudData = snapshot.val();
-          const arr = cloudData ? Object.values(cloudData).filter(Boolean) : [];
-          arr.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-          promisesList = arr;
-          saveStorage('pa_promises_list', promisesList);
-          renderPromises();
-        });
+        // promises 전체 구독은 금지: 규칙상 내가 members 에 포함된 약속만 읽을 수 있으므로
+        // user_promises/{uid} 색인을 구독한 뒤 약속 노드를 개별 구독한다.
+        if (currentAuthUid()) subscribeMyPromises(currentAuthUid());
 
         // DB 연결 즉시 내 프로필 클라우드 동기화 (친구 코드 등록 보장)
         if (userProfile && userProfile.name) {
@@ -525,6 +526,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (firebase.auth) {
           firebase.auth().onAuthStateChanged((authUser) => {
+            if (!authUser) {
+              detachPromiseSubscriptions();
+              return;
+            }
+            subscribeMyPromises(authUser.uid);
             if (authUser && userProfile && userProfile.name) {
               // 로그인이 확인되면 uid 를 프로필에 채우고 규칙이 요구하는 형태로 재동기화
               if (userProfile.uid !== authUser.uid) {
@@ -552,18 +558,618 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // ==========================================
+  // 약속 구독 (내가 참여/초대된 약속만)
+  //   보안 규칙상 promises 전체 읽기는 차단되어 있다.
+  //   user_promises/{uid} 색인 → promises/{id} 개별 구독 순서로 접근한다.
+  // ==========================================
+  function rebuildPromisesListFromCloud() {
+    const arr = Object.values(cloudPromisesMap).filter(Boolean);
+    arr.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    promisesList = arr;
+    saveStorage('pa_promises_list', promisesList);
+    renderPromises();
+  }
+
+  function detachPromiseSubscriptions() {
+    if (promiseIndexRef) {
+      promiseIndexRef.off();
+      promiseIndexRef = null;
+    }
+    Object.keys(promiseNodeRefs).forEach((id) => promiseNodeRefs[id].off());
+    promiseNodeRefs = {};
+    cloudPromisesMap = {};
+    subscribedPromiseUid = null;
+  }
+
+  function subscribeMyPromises(uid) {
+    if (!dbRef || !uid) return;
+    if (subscribedPromiseUid === uid) return;
+
+    detachPromiseSubscriptions();
+    subscribedPromiseUid = uid;
+    promiseIndexRef = dbRef.ref('user_promises/' + uid);
+
+    promiseIndexRef.on('value', (snapshot) => {
+      const ids = Object.keys(snapshot.val() || {});
+
+      // 색인에서 빠진 약속은 구독 해제
+      Object.keys(promiseNodeRefs).forEach((id) => {
+        if (ids.indexOf(id) !== -1) return;
+        promiseNodeRefs[id].off();
+        delete promiseNodeRefs[id];
+        delete cloudPromisesMap[id];
+      });
+
+      ids.forEach((id) => {
+        if (promiseNodeRefs[id]) return;
+        const ref = dbRef.ref('promises/' + id);
+        promiseNodeRefs[id] = ref;
+        ref.on('value', (pSnap) => {
+          const val = pSnap.val();
+          if (val) cloudPromisesMap[id] = val;
+          else delete cloudPromisesMap[id];
+          rebuildPromisesListFromCloud();
+        }, (err) => {
+          // 읽기 거부(멤버 아님) 등: 목록에서 제외
+          console.warn('[DB] 약속 읽기 실패 ' + id + ':', err && err.message ? err.message : err);
+          delete cloudPromisesMap[id];
+          rebuildPromisesListFromCloud();
+        });
+      });
+
+      rebuildPromisesListFromCloud();
+    }, (err) => {
+      console.warn('[DB] 약속 색인 구독 실패:', err && err.message ? err.message : err);
+    });
+  }
+
+  // 약속의 멤버 uid 목록 (읽기 권한의 유일한 기준)
+  function promiseMemberUids(promiseObj) {
+    return Object.keys((promiseObj && promiseObj.members) || {});
+  }
+
+  // ==========================================
+  // 참가 상태(attendees) 헬퍼
+  //   보안 규칙: 약속 내용/members 는 호스트만, attendees/{uid} 는 본인만 쓸 수 있다.
+  //   따라서 "참가자"는 attendees 맵이 단일 소스다. (participants 배열은 구버전 호환용)
+  // ==========================================
+  function promiseAttendees(promiseObj) {
+    const map = (promiseObj && promiseObj.attendees) || {};
+    return Object.keys(map)
+      .map((uid) => Object.assign({ uid: uid }, map[uid] || {}))
+      .filter((a) => a && a.name);
+  }
+
+  function promiseParticipantNames(promiseObj) {
+    const names = promiseAttendees(promiseObj).map((a) => a.name);
+    if (names.length > 0) return names;
+    return Array.isArray(promiseObj && promiseObj.participants) ? promiseObj.participants : [];
+  }
+
+  function amIHostOf(promiseObj) {
+    const myUid = ensureProfileUid();
+    return !!(myUid && promiseObj && promiseObj.hostUid === myUid);
+  }
+
+  function amIAttendeeOf(promiseObj) {
+    const myUid = ensureProfileUid();
+    if (myUid && promiseObj && promiseObj.attendees && promiseObj.attendees[myUid]) return true;
+    // 구버전 약속(attendees 없음) 호환
+    if (promiseObj && !promiseObj.attendees && Array.isArray(promiseObj.participants)) {
+      const myName = userProfile ? userProfile.name : '나';
+      return promiseObj.participants.includes(myName);
+    }
+    return false;
+  }
+
+  function amIMemberOf(promiseObj) {
+    const myUid = ensureProfileUid();
+    return !!(myUid && promiseObj && promiseObj.members && promiseObj.members[myUid]);
+  }
+
+  function myAttendeeRecord(promiseObj) {
+    const myUid = ensureProfileUid();
+    if (!myUid || !promiseObj || !promiseObj.attendees) return null;
+    return promiseObj.attendees[myUid] || null;
+  }
+
+  // 내 참가/도착 상태만 기록한다. (약속 본문은 건드리지 않음)
+  function writeMyAttendance(promiseObj, extra) {
+    const myUid = ensureProfileUid();
+    if (!promiseObj || !promiseObj.id || !myUid) return;
+
+    const prev = (promiseObj.attendees && promiseObj.attendees[myUid]) || {};
+    const record = {
+      uid: myUid,
+      name: userProfile ? userProfile.name : '나',
+      avatar: (userProfile && userProfile.avatar) || DEFAULT_AVATAR,
+      joinedAt: prev.joinedAt || Date.now(),
+      arrived: !!prev.arrived
+    };
+    Object.keys(extra || {}).forEach((k) => { record[k] = extra[k]; });
+
+    promiseObj.attendees = promiseObj.attendees || {};
+    promiseObj.attendees[myUid] = record;
+    saveStorage('pa_promises_list', promisesList);
+
+    if (!dbRef) return;
+    dbWrite('promises/' + promiseObj.id + '/attendees/' + myUid, record).then((ok) => {
+      if (ok) dbWrite('user_promises/' + myUid + '/' + promiseObj.id, true);
+    });
+  }
+
+  // 초대할 친구들의 uid 로 members 맵을 만든다. (uid 없는 친구는 클라우드 공유 불가)
+  function buildMembersMap(hostUid, friendObjs) {
+    const members = {};
+    if (hostUid) members[hostUid] = true;
+    (friendObjs || []).forEach((f) => {
+      if (f && f.uid) members[f.uid] = true;
+    });
+    return members;
+  }
+
   // 변경된 약속 1건만 클라우드에 반영 (전역 덮어쓰기 금지)
+  // 약속 본문 쓰기는 호스트만 허용된다. (규칙과 동일한 제약을 클라이언트에도 적용)
   function syncPromisesToCloud(changedPromise) {
     saveStorage('pa_promises_list', promisesList);
     if (!dbRef) return;
-    if (changedPromise && changedPromise.id) {
-      dbWrite('promises/' + changedPromise.id, changedPromise);
+    if (!changedPromise || !changedPromise.id) return;
+
+    const myUid = ensureProfileUid();
+    if (!myUid) {
+      console.warn('[DB] 로그인 uid 가 없어 약속을 공유하지 않습니다.');
+      return;
+    }
+    if (changedPromise.hostUid && changedPromise.hostUid !== myUid) {
+      console.warn('[DB] 호스트가 아니므로 약속 본문을 수정하지 않습니다:', changedPromise.id);
+      return;
+    }
+    if (!changedPromise.members) changedPromise.members = {};
+    changedPromise.members[myUid] = true;
+
+    // 약속 노드를 먼저 쓴 뒤 색인을 갱신한다.
+    // (색인 쓰기 규칙이 promises/{id}/hostUid 를 참조하므로 순서가 중요)
+    dbWrite('promises/' + changedPromise.id, changedPromise).then((ok) => {
+      if (!ok) return;
+      promiseMemberUids(changedPromise).forEach((uid) => {
+        dbWrite('user_promises/' + uid + '/' + changedPromise.id, true);
+      });
+    });
+  }
+
+  function removePromiseFromCloud(promiseId, promiseObj) {
+    saveStorage('pa_promises_list', promisesList);
+    if (!dbRef || !promiseId) return;
+
+    const myUid = ensureProfileUid();
+    const isHost = !!(myUid && promiseObj && promiseObj.hostUid === myUid);
+
+    if (!isHost) {
+      // 호스트가 아니면 약속을 지울 수 없다. 내 색인만 정리한다.
+      if (myUid) dbWrite('user_promises/' + myUid + '/' + promiseId, null);
+      return;
+    }
+
+    // 색인을 먼저 지운다 (약속 노드가 사라지면 호스트 검증을 할 수 없다)
+    promiseMemberUids(promiseObj).forEach((uid) => {
+      dbWrite('user_promises/' + uid + '/' + promiseId, null);
+    });
+    if (myUid) dbWrite('user_promises/' + myUid + '/' + promiseId, null);
+
+    dbWrite('promises/' + promiseId, null);
+  }
+
+  // 약속에서 나가기/초대 거절: 내 참가 기록과 색인만 제거한다.
+  // (members 는 호스트 전용이라 건드리지 않는다)
+  function detachMyselfFromPromise(promiseObj) {
+    if (!promiseObj || !promiseObj.id) return;
+    const myUid = ensureProfileUid();
+
+    if (promiseObj.attendees && myUid) delete promiseObj.attendees[myUid];
+    if (!declinedPromiseIds.includes(promiseObj.id)) {
+      declinedPromiseIds.push(promiseObj.id);
+      saveStorage('pa_declined_promises', declinedPromiseIds);
+    }
+    saveStorage('pa_promises_list', promisesList);
+
+    if (!dbRef || !myUid) return;
+    dbWrite('promises/' + promiseObj.id + '/attendees/' + myUid, null).then(() => {
+      dbWrite('user_promises/' + myUid + '/' + promiseObj.id, null);
+    });
+  }
+
+  // 약속 나가기: 호스트이고 남은 참가자가 없으면 약속을 삭제하고,
+  // 그 외에는 내 참가 기록/색인만 제거한다.
+  function leavePromise(promiseObj) {
+    if (!promiseObj || !promiseObj.id) return;
+    const myUid = ensureProfileUid();
+    const others = promiseAttendees(promiseObj).filter(a => a.uid !== myUid);
+
+    if (amIHostOf(promiseObj) && others.length === 0) {
+      promisesList = promisesList.filter(p => p.id !== promiseObj.id);
+      removePromiseFromCloud(promiseObj.id, promiseObj);
+      return;
+    }
+
+    detachMyselfFromPromise(promiseObj);
+    promisesList = promisesList.filter(p => p.id !== promiseObj.id);
+  }
+
+  // ==========================================
+  // 테마 (다크 / 라이트) - 기본값: 다크
+  // ==========================================
+  const THEME_META = {
+    dark: { label: '다크 모드', themeColor: '#000000' },
+    light: { label: '라이트 모드', themeColor: '#ffffff' }
+  };
+
+  function loadTheme() {
+    return localStorage.getItem('pa_theme') === 'light' ? 'light' : 'dark';
+  }
+
+  function applyTheme(theme) {
+    const next = theme === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('pa_theme', next);
+
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', THEME_META[next].themeColor);
+
+    const label = document.getElementById('themeCurrentLabel');
+    if (label) label.textContent = THEME_META[next].label;
+
+    document.querySelectorAll('.theme-option').forEach((btn) => {
+      const isOn = btn.getAttribute('data-theme-value') === next;
+      btn.classList.toggle('selected', isOn);
+      btn.setAttribute('aria-pressed', isOn ? 'true' : 'false');
+    });
+  }
+
+  applyTheme(loadTheme());
+
+  const themeModal = document.getElementById('themeModal');
+  const btnOpenThemeSettings = document.getElementById('btnOpenThemeSettings');
+  const btnCloseTheme = document.getElementById('btnCloseTheme');
+
+  if (btnOpenThemeSettings && themeModal) {
+    btnOpenThemeSettings.addEventListener('click', () => {
+      if (settingsModal) settingsModal.classList.remove('active');
+      themeModal.classList.add('active');
+      applyTheme(loadTheme());
+      if (window.lucide) window.lucide.createIcons();
+    });
+  }
+
+  if (btnCloseTheme && themeModal) {
+    btnCloseTheme.addEventListener('click', () => {
+      themeModal.classList.remove('active');
+      if (settingsModal) settingsModal.classList.add('active');
+    });
+  }
+
+  document.querySelectorAll('.theme-option').forEach((btn) => {
+    btn.addEventListener('click', () => applyTheme(btn.getAttribute('data-theme-value')));
+  });
+
+  // 벌칙 표시 문구 (종류 + 지속 시간)
+  function penaltyLabel(promiseObj) {
+    const type = promiseObj && promiseObj.penaltyType;
+    if (type !== 'alarm' && type !== 'vibrate') return '없음';
+    const min = Number(promiseObj.penaltyDurationMin) || 0;
+    const dur = min > 0 ? `${min}분간` : '도착할 때까지';
+    return type === 'vibrate' ? `${dur} 진동` : `${dur} 알람 소리`;
+  }
+
+  // ==========================================
+  // 받은 알림 플로팅 버튼 + 바텀 시트
+  //   초대받은 약속 / 받은 친구 요청 개수를 원형 버튼 대각선 아래 배지로 표시한다.
+  // ==========================================
+  let invitedCount = 0;
+
+  function setFabBadge(btnId, badgeId, count) {
+    const btn = document.getElementById(btnId);
+    const badge = document.getElementById(badgeId);
+    if (!btn || !badge) return;
+
+    if (count > 0) {
+      badge.hidden = false;
+      badge.textContent = count > 99 ? '99+' : String(count);
+      btn.classList.add('has-items');
+    } else {
+      badge.hidden = true;
+      btn.classList.remove('has-items');
     }
   }
 
-  function removePromiseFromCloud(promiseId) {
-    saveStorage('pa_promises_list', promisesList);
-    if (dbRef && promiseId) dbWrite('promises/' + promiseId, null);
+  function updateInboxBadges() {
+    setFabBadge('fabInvites', 'fabInvitesBadge', invitedCount);
+    setFabBadge('fabFriendReqs', 'fabFriendReqsBadge', (friendRequestsList || []).length);
+  }
+
+  function openSheet(id) {
+    const sheet = document.getElementById(id);
+    if (!sheet) return;
+    sheet.classList.add('active');
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  function closeSheet(id) {
+    const sheet = document.getElementById(id);
+    if (sheet) sheet.classList.remove('active');
+  }
+
+  [
+    ['fabInvites', 'inviteSheet', 'btnCloseInviteSheet'],
+    ['fabFriendReqs', 'friendReqSheet', 'btnCloseFriendReqSheet']
+  ].forEach(([fabId, sheetId, closeId]) => {
+    const fab = document.getElementById(fabId);
+    const closeBtn = document.getElementById(closeId);
+    const sheet = document.getElementById(sheetId);
+
+    if (fab) fab.addEventListener('click', () => openSheet(sheetId));
+    if (closeBtn) closeBtn.addEventListener('click', () => closeSheet(sheetId));
+    // 바깥(딤 영역) 탭으로 닫기
+    if (sheet) sheet.addEventListener('click', (e) => { if (e.target === sheet) closeSheet(sheetId); });
+  });
+
+  // ==========================================
+  // 약속 기록 캘린더 (월 단위 + 종이 넘김 애니메이션)
+  // ==========================================
+  let calViewYear = new Date().getFullYear();
+  let calViewMonth = new Date().getMonth();   // 0-11
+
+  // 해당 약속의 지각(벌칙) 대상자 이름 목록
+  function latePenaltyNames(promiseObj) {
+    const target = Number(promiseObj && promiseObj.targetTimestamp);
+    if (!Number.isFinite(target)) return [];
+    if (Date.now() < target) return [];
+
+    return promiseAttendees(promiseObj)
+      .filter((a) => !a.arrived || (Number(a.arrivedAt) || 0) > target)
+      .map((a) => a.name);
+  }
+
+  function promisesOnDate(year, month, day) {
+    return promisesList.filter((p) => {
+      if (!amIAttendeeOf(p)) return false;
+      const ts = Number(p.targetTimestamp);
+      if (!Number.isFinite(ts)) return false;
+      const d = new Date(ts);
+      return d.getFullYear() === year && d.getMonth() === month && d.getDate() === day;
+    });
+  }
+
+  function renderCalendar(flipDirection) {
+    const grid = document.getElementById('calendarGrid');
+    const label = document.getElementById('calMonthLabel');
+    const summary = document.getElementById('calMonthSummary');
+    const sheet = document.getElementById('calendarSheet');
+    if (!grid) return;
+
+    if (label) label.textContent = `${calViewYear}년 ${calViewMonth + 1}월`;
+
+    // 넘김 애니메이션: 현재 페이지를 복제해 위에 띄우고 회전시킨다.
+    // 아래에는 이미 새 달이 그려져 있어 넘기는 동안 다음 장이 보인다.
+    if (sheet && flipDirection) {
+      const stage = sheet.parentElement;
+      if (stage) {
+        stage.querySelectorAll('.calendar-ghost').forEach((g) => g.remove());
+
+        const ghost = sheet.cloneNode(true);
+        ghost.removeAttribute('id');
+        ghost.className = 'calendar-ghost';
+        ghost.style.height = `${sheet.offsetHeight}px`;
+        stage.appendChild(ghost);
+
+        void ghost.offsetWidth;
+        ghost.classList.add(flipDirection === 'next' ? 'turn-next' : 'turn-prev');
+        ghost.addEventListener('animationend', () => ghost.remove(), { once: true });
+        // 애니메이션 이벤트가 유실되는 경우를 대비한 정리
+        setTimeout(() => { if (ghost.parentElement) ghost.remove(); }, 1100);
+
+        // 아래에 드러나는 새 페이지도 살짝 흔들리며 자리를 잡는다
+        sheet.classList.remove('settle-next', 'settle-prev');
+        void sheet.offsetWidth;
+        sheet.classList.add(flipDirection === 'next' ? 'settle-next' : 'settle-prev');
+        sheet.addEventListener('animationend', () => {
+          sheet.classList.remove('settle-next', 'settle-prev');
+        }, { once: true });
+      }
+    } else if (sheet) {
+      sheet.classList.remove('settle-next', 'settle-prev');
+    }
+
+    const firstWeekday = new Date(calViewYear, calViewMonth, 1).getDay();
+    const daysInMonth = new Date(calViewYear, calViewMonth + 1, 0).getDate();
+    const today = new Date();
+
+    grid.innerHTML = '';
+    let monthCount = 0;
+    let upcomingCount = 0;
+    let doneCount = 0;
+    let lateCount = 0;
+    const now = Date.now();
+
+    for (let i = 0; i < firstWeekday; i++) {
+      const pad = document.createElement('div');
+      pad.className = 'cal-cell empty';
+      grid.appendChild(pad);
+    }
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dayPromises = promisesOnDate(calViewYear, calViewMonth, day);
+      monthCount += dayPromises.length;
+
+      const weekday = new Date(calViewYear, calViewMonth, day).getDay();
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'cal-cell';
+      if (weekday === 0) cell.classList.add('sun');
+      if (weekday === 6) cell.classList.add('sat');
+      if (dayPromises.length > 0) cell.classList.add('has-promise');
+      if (today.getFullYear() === calViewYear && today.getMonth() === calViewMonth && today.getDate() === day) {
+        cell.classList.add('today');
+      }
+
+      // 예정 = 체크(✓), 끝난 약속 = 동그라미(○), 지각자 있던 약속 = 빨간 동그라미
+      const marks = dayPromises.slice(0, 3).map((p) => {
+        const ts = Number(p.targetTimestamp) || 0;
+        if (ts > now) {
+          upcomingCount += 1;
+          return '<span class="cal-mark-check">✓</span>';
+        }
+        if (latePenaltyNames(p).length > 0) {
+          lateCount += 1;
+          doneCount += 1;
+          return '<span class="cal-mark-late">○</span>';
+        }
+        doneCount += 1;
+        return '<span class="cal-mark-done">○</span>';
+      }).join('');
+
+      cell.innerHTML = `<span class="cal-daynum">${day}</span><span class="cal-marks">${marks}</span>`;
+
+      if (dayPromises.length > 0) {
+        cell.addEventListener('click', () => openDaySheet(calViewYear, calViewMonth, day));
+      } else {
+        cell.disabled = true;
+      }
+
+      grid.appendChild(cell);
+    }
+
+    if (summary) summary.textContent = `${calViewYear}년 ${calViewMonth + 1}월 약속 ${monthCount}건`;
+
+    const legend = document.getElementById('calLegend');
+    if (legend) {
+      legend.innerHTML = `
+        <span><span class="cal-mark-check">✓</span> 예정 ${upcomingCount}건</span>
+        <span><span class="cal-mark-done">○</span> 완료 ${doneCount}건</span>
+        <span><span class="cal-mark-late">○</span> 지각 ${lateCount}건</span>
+      `;
+    }
+
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  function shiftCalendarMonth(delta) {
+    calViewMonth += delta;
+    if (calViewMonth < 0) { calViewMonth = 11; calViewYear -= 1; }
+    if (calViewMonth > 11) { calViewMonth = 0; calViewYear += 1; }
+    renderCalendar(delta > 0 ? 'next' : 'prev');
+  }
+
+  const btnCalPrev = document.getElementById('btnCalPrev');
+  const btnCalNext = document.getElementById('btnCalNext');
+  if (btnCalPrev) btnCalPrev.addEventListener('click', () => shiftCalendarMonth(-1));
+  if (btnCalNext) btnCalNext.addEventListener('click', () => shiftCalendarMonth(1));
+
+  // 년/월 직접 입력 (라벨은 항상 중앙에 두고, 클릭하면 입력 창이 뜬다)
+  const calMonthLabel = document.getElementById('calMonthLabel');
+  const calMonthModal = document.getElementById('calMonthModal');
+  const btnCloseCalMonth = document.getElementById('btnCloseCalMonth');
+  const inputCalYear = document.getElementById('inputCalYear');
+  const inputCalMonth = document.getElementById('inputCalMonth');
+  const btnCalMonthApply = document.getElementById('btnCalMonthApply');
+  const btnCalMonthToday = document.getElementById('btnCalMonthToday');
+
+  function openMonthEditor() {
+    if (!calMonthModal) return;
+    if (inputCalYear) inputCalYear.value = String(calViewYear);
+    if (inputCalMonth) inputCalMonth.value = String(calViewMonth + 1);
+    calMonthModal.classList.add('active');
+    if (window.lucide) window.lucide.createIcons();
+    setTimeout(() => { if (inputCalYear) inputCalYear.select(); }, 60);
+  }
+
+  function closeMonthEditor() {
+    if (calMonthModal) calMonthModal.classList.remove('active');
+  }
+
+  function goToMonth(y, m0) {
+    const forward = (y * 12 + m0) > (calViewYear * 12 + calViewMonth);
+    const same = (y === calViewYear && m0 === calViewMonth);
+    calViewYear = y;
+    calViewMonth = m0;
+    closeMonthEditor();
+    renderCalendar(same ? undefined : (forward ? 'next' : 'prev'));
+  }
+
+  function applyMonthEditor() {
+    const y = parseInt(inputCalYear && inputCalYear.value, 10);
+    const m = parseInt(inputCalMonth && inputCalMonth.value, 10);
+
+    if (!Number.isFinite(y) || y < 1970 || y > 2999 || !Number.isFinite(m) || m < 1 || m > 12) {
+      alert('년도(1970~2999)와 월(1~12)을 숫자로 입력해 주세요.');
+      return;
+    }
+
+    goToMonth(y, m - 1);
+  }
+
+  if (calMonthLabel) calMonthLabel.addEventListener('click', openMonthEditor);
+  if (btnCloseCalMonth) btnCloseCalMonth.addEventListener('click', closeMonthEditor);
+  if (calMonthModal) calMonthModal.addEventListener('click', (e) => { if (e.target === calMonthModal) closeMonthEditor(); });
+  if (btnCalMonthApply) btnCalMonthApply.addEventListener('click', applyMonthEditor);
+  if (btnCalMonthToday) {
+    btnCalMonthToday.addEventListener('click', () => {
+      const now = new Date();
+      goToMonth(now.getFullYear(), now.getMonth());
+    });
+  }
+
+  [inputCalYear, inputCalMonth].forEach((el) => {
+    if (!el) return;
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); applyMonthEditor(); }
+      if (e.key === 'Escape') closeMonthEditor();
+    });
+  });
+
+  const btnCloseDaySheet = document.getElementById('btnCloseDaySheet');
+  if (btnCloseDaySheet) btnCloseDaySheet.addEventListener('click', () => closeSheet('daySheet'));
+  const daySheetEl = document.getElementById('daySheet');
+  if (daySheetEl) daySheetEl.addEventListener('click', (e) => { if (e.target === daySheetEl) closeSheet('daySheet'); });
+
+  function openDaySheet(year, month, day) {
+    const titleEl = document.getElementById('daySheetTitle');
+    const listEl = document.getElementById('daySheetList');
+    if (!listEl) return;
+
+    if (titleEl) titleEl.textContent = `${year}년 ${month + 1}월 ${day}일 약속`;
+
+    const items = promisesOnDate(year, month, day)
+      .sort((a, b) => (a.targetTimestamp || 0) - (b.targetTimestamp || 0));
+
+    listEl.innerHTML = '';
+    items.forEach((p) => {
+      const d = new Date(Number(p.targetTimestamp));
+      const timeStr = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      const names = promiseParticipantNames(p);
+      const lateNames = latePenaltyNames(p);
+      const locationDisplay = p.venueName
+        ? `${p.venueName} (${p.location || ''})`
+        : (p.location || '장소 미정');
+
+      const card = document.createElement('div');
+      card.className = 'card-item';
+      card.innerHTML = `
+        <div class="card-header-row">
+          <h3 class="card-title">${escapeHtml(p.title || '약속')}</h3>
+          <span class="badge ${lateNames.length > 0 ? 'wait' : 'done'}">${lateNames.length > 0 ? '지각 발생' : '정시 완료'}</span>
+        </div>
+        <div class="card-info">
+          <div class="card-info-item"><i data-lucide="clock"></i> <span class="ci-label">시간</span> <span class="ci-value">${escapeHtml(timeStr)}</span></div>
+          <div class="card-info-item"><i data-lucide="map-pin"></i> <span class="ci-label">장소</span> <span class="ci-value">${escapeHtml(locationDisplay)}</span></div>
+          <div class="card-info-item"><i data-lucide="users"></i> <span class="ci-label">인원</span> <span class="ci-value">${names.length}명 · ${escapeHtml(names.join(', ') || '-')}</span></div>
+          <div class="card-info-item"><i data-lucide="bell-ring"></i> <span class="ci-label">벌칙</span> <span class="ci-value">${lateNames.length > 0 ? escapeHtml(lateNames.join(', ')) : '없음'}</span></div>
+        </div>
+      `;
+      listEl.appendChild(card);
+    });
+
+    openSheet('daySheet');
   }
 
   // DOM Elements
@@ -577,8 +1183,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // Header & Settings Buttons
   const btnOpenSettings = document.getElementById('btnOpenSettings');
   const btnCloseSettings = document.getElementById('btnCloseSettings');
-  const btnCopySettingsCode = document.getElementById('btnCopySettingsCode');
-  const btnAddFriendByCode = document.getElementById('btnAddFriendByCode');
   const btnCloseLiveMap = document.getElementById('btnCloseLiveMap');
 
   // Location Picker Buttons
@@ -721,7 +1325,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (onboardingModal) onboardingModal.classList.remove('active');
       updateHeaderProfile();
       renderAll();
-      alert(`🎉 [ ${userProfile.name} ] 님, 오신 것을 환영합니다!`);
+      alert(`🎉 ${userProfile.name} 님, 오신 것을 환영합니다!`);
     };
 
     if (dbRef) {
@@ -993,7 +1597,7 @@ document.addEventListener('DOMContentLoaded', () => {
       updateHeaderProfile();
       renderAll();
 
-      alert(`가입 완료!\n\n닉네임: ${name}\n친구 코드: ${userCode}`);
+      alert(`가입 완료!\n\n닉네임: ${name}`);
     });
   }
 
@@ -1103,9 +1707,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (settingsNameEl) settingsNameEl.textContent = userProfile.name;
     const settingsLocEl = document.getElementById('settingsLocText');
     if (settingsLocEl) settingsLocEl.textContent = userProfile.location || '실시간 내 위치';
-    const settingsCodeEl = document.getElementById('settingsCodeText');
-    if (settingsCodeEl) settingsCodeEl.textContent = myCode;
 
+    // 친구 코드/친구 추가 UI 는 [친구 관리] 탭에만 둔다.
     const tabCodeEl = document.getElementById('tabMyCodeText');
     if (tabCodeEl) tabCodeEl.textContent = myCode;
 
@@ -1274,7 +1877,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const btnCopyTabCode = document.getElementById('btnCopyTabCode');
-  if (btnCopySettingsCode) btnCopySettingsCode.addEventListener('click', () => copyCodeToClipboard(userProfile?.code));
   if (btnCopyTabCode) btnCopyTabCode.addEventListener('click', () => copyCodeToClipboard(userProfile?.code));
 
   function copyCodeToClipboard(codeText) {
@@ -1282,7 +1884,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!code) return;
     syncUserProfileToCloud();
     navigator.clipboard.writeText(code).then(() => {
-      alert(`📋 내 친구 코드 [ ${code} ] 가 복사되었습니다!\n(서버 등록 완료 - 친구에게 코드를 전달해 주세요)`);
+      alert(`📋 내 친구 코드 ${code} 가 복사되었습니다!\n(서버 등록 완료 - 친구에게 코드를 전달해 주세요)`);
     }).catch(() => {
       alert(`📋 내 친구 코드: ${code}`);
     });
@@ -1356,7 +1958,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!isHandled) {
         isHandled = true;
         restoreBtn();
-        alert('❌ 존재하지 않는 친구 코드이거나 서버 응답 시간이 초과되었습니다.\n\n💡 상대방 스마트폰 화면의 [내 친구 코드 복사]를 누른 후 다시 시도해 보세요!');
+        alert('❌ 존재하지 않는 친구 코드이거나 서버 응답 시간이 초과되었습니다.\n\n💡 상대방 스마트폰 화면에서 내 친구 코드 복사를 누른 후 다시 시도해 보세요!');
       }
     }, 12000);
 
@@ -1365,7 +1967,7 @@ document.addEventListener('DOMContentLoaded', () => {
       isHandled = true;
       clearTimeout(timeoutId);
       restoreBtn();
-      alert(`❌ [ ${rawVal} ] 친구 코드를 찾을 수 없습니다.\n\n💡 상대방 스마트폰 앱에서 [내 친구 코드]가 정상적으로 화면에 떠있는지 확인해 주세요!`);
+      alert(`❌ ${rawVal} 친구 코드를 찾을 수 없습니다.\n\n💡 상대방 스마트폰 앱에서 내 친구 코드가 정상적으로 화면에 떠있는지 확인해 주세요!`);
     };
 
     // 정규 키 단일 조회. 이메일 입력인 경우 이메일 인덱스로 우회 조회한다.
@@ -1430,17 +2032,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
       codeInputEl.value = '';
       if (settingsModal) settingsModal.classList.remove('active');
-      alert(`📩 [ ${targetUser.name} ] 님에게 친구 요청을 보냈습니다!\n\n상대방 스마트폰 화면의 [받은 친구 요청]에서 [수락]을 누르면 바로 연결됩니다.`);
+      alert(`📩 ${targetUser.name} 님에게 친구 요청을 보냈습니다!\n\n상대방 스마트폰 화면의 받은 친구 요청에서 수락을 누르면 바로 연결됩니다.`);
     }
 
     if (rawVal.includes('@')) lookupByEmail();
     else lookupByCode();
-  }
-
-  if (btnAddFriendByCode) {
-    btnAddFriendByCode.addEventListener('click', () => {
-      processAddFriend(document.getElementById('inputAddFriendCode'));
-    });
   }
 
   const btnTabAddFriendByCode = document.getElementById('btnTabAddFriendByCode');
@@ -1454,22 +2050,50 @@ document.addEventListener('DOMContentLoaded', () => {
   // ==========================================
   // 5. Tab Navigation & Promise Rendering
   // ==========================================
+  let activeTabIndex = 0;
+
+  // 초대받은 약속 버튼은 약속 목록 탭에서만, 친구 요청 버튼은 친구 관리 탭에서만 보인다.
+  function updateFabVisibility(tabId) {
+    const fabInvites = document.getElementById('fabInvites');
+    const fabFriendReqs = document.getElementById('fabFriendReqs');
+    if (fabInvites) fabInvites.style.display = tabId === 'tabPromises' ? 'flex' : 'none';
+    if (fabFriendReqs) fabFriendReqs.style.display = tabId === 'tabFriends' ? 'flex' : 'none';
+  }
+
   tabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       const targetTab = btn.getAttribute('data-tab');
+      const nextIndex = Array.prototype.indexOf.call(tabBtns, btn);
+      if (nextIndex === activeTabIndex && btn.classList.contains('active')) return;
+
+      // 탭 순서 기준으로 슬라이드 방향 결정
+      const fromRight = nextIndex > activeTabIndex;
+      activeTabIndex = nextIndex;
+
       tabBtns.forEach(b => b.classList.remove('active'));
-      tabPages.forEach(p => p.classList.remove('active'));
+      tabPages.forEach(p => p.classList.remove('active', 'slide-from-right', 'slide-from-left'));
 
       btn.classList.add('active');
       const targetEl = document.getElementById(targetTab);
-      if (targetEl) targetEl.classList.add('active');
+      if (targetEl) {
+        targetEl.classList.add('active', fromRight ? 'slide-from-right' : 'slide-from-left');
+        const main = document.querySelector('.app-main');
+        if (main) main.scrollTop = 0;
+      }
+
+      updateFabVisibility(targetTab);
+      if (targetTab === 'tabHistory') renderCalendar();
     });
   });
+
+  updateFabVisibility('tabPromises');
 
   function renderAll() {
     renderPromises();
     renderFriendRequests();
     renderFriends();
+    const historyTab = document.getElementById('tabHistory');
+    if (historyTab && historyTab.classList.contains('active')) renderCalendar();
   }
 
   function renderFriendRequests() {
@@ -1477,36 +2101,36 @@ document.addEventListener('DOMContentLoaded', () => {
     const container = document.getElementById('friendRequestsList');
     if (!section || !container) return;
 
+    updateInboxBadges();
+
     if (!friendRequestsList || friendRequestsList.length === 0) {
-      section.style.display = 'none';
-      container.innerHTML = '';
+      container.innerHTML = `<p style="color:var(--text-dim); text-align:center; padding:24px 12px; font-size:0.84rem;">받은 친구 요청이 없습니다.</p>`;
       return;
     }
 
-    section.style.display = 'block';
     container.innerHTML = '';
 
     friendRequestsList.forEach(req => {
       const card = document.createElement('div');
       card.className = 'card-item';
-      card.style.background = 'rgba(253, 203, 110, 0.08)';
-      card.style.borderColor = '#fdcb6e';
+      card.style.background = 'var(--yellow-soft)';
+      card.style.borderColor = 'var(--yellow)';
       card.style.padding = '12px 14px';
 
       card.innerHTML = `
         <div class="card-header-row" style="display:flex; align-items:center; gap:10px;">
           <img src="${safeImageUrl(req.fromAvatar)}" style="width:38px; height:38px; border-radius:50%; border:2px solid var(--primary); object-fit:cover;">
           <div>
-            <div style="font-weight:700; color:#fff; font-size:0.9rem;">${escapeHtml(req.fromName || '친구')}</div>
-            <div style="font-size:0.75rem; color:#a0a7b5;">코드: ${escapeHtml(req.fromCode || '')}</div>
+            <div style="font-weight:700; color: var(--text-main); font-size:0.9rem;">${escapeHtml(req.fromName || '친구')}</div>
+            <div style="font-size:0.75rem; color: var(--text-muted);">코드: ${escapeHtml(req.fromCode || '')}</div>
           </div>
-          <span class="badge wait" style="margin-left:auto; background:rgba(253,203,110,0.2); color:#fdcb6e; border:1px solid #fdcb6e; font-size:0.72rem; padding:3px 8px;">친구요청 도착</span>
+          <span class="badge wait" style="margin-left:auto; background:var(--yellow-soft); color:var(--yellow); border:1px solid var(--yellow); font-size:0.72rem; padding:3px 8px;">친구요청 도착</span>
         </div>
         <div class="card-action-row" style="margin-top:10px; display:flex; gap:8px;">
           <button class="btn-primary btn-accept-friend-req" data-code="${escapeHtml(req.fromCode)}" style="flex:1; background:var(--green); font-weight:700; padding:8px; font-size:0.82rem;">
             <i data-lucide="check"></i> 수락
           </button>
-          <button class="btn-secondary btn-reject-friend-req" data-code="${escapeHtml(req.fromCode)}" style="flex:1; color:#ff7675; border-color:rgba(255,118,117,0.4); background:rgba(255,118,117,0.1); font-weight:700; padding:8px; font-size:0.82rem;">
+          <button class="btn-secondary btn-reject-friend-req" data-code="${escapeHtml(req.fromCode)}" style="flex:1; color:var(--red); border-color:var(--border-color); background:var(--border-color); font-weight:700; padding:8px; font-size:0.82rem;">
             <i data-lucide="x"></i> 거절
           </button>
         </div>
@@ -1578,7 +2202,7 @@ document.addEventListener('DOMContentLoaded', () => {
     syncFriendsToCloud();
     friendRequestsList = friendRequestsList.filter(r => r.fromCode !== fromCode);
     renderAll();
-    alert(`🎉 [ ${req.fromName} ] 님의 친구 요청을 수락했습니다! 상호 친구로 등록되었습니다.`);
+    alert(`🎉 ${req.fromName} 님의 친구 요청을 수락했습니다! 상호 친구로 등록되었습니다.`);
   }
 
   function rejectFriendRequest(fromCode) {
@@ -1596,7 +2220,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderPromises() {
     const listContainer = document.getElementById('promisesList');
-    const invitationSection = document.getElementById('invitationSection');
     const invitationsList = document.getElementById('invitationsList');
 
     if (!listContainer) return;
@@ -1606,18 +2229,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const myName = userProfile ? userProfile.name : '나';
 
     // Separate My Promises vs Invited Promises
-    const invitedPromises = promisesList.filter(p => p.invitedUsers && p.invitedUsers.includes(myName) && !p.participants.includes(myName));
-    const joinedPromises = promisesList.filter(p => p.participants && p.participants.includes(myName));
+    // 초대장 = members 에는 있지만 아직 참가(attendees) 하지 않은 약속
+    const invitedPromises = promisesList.filter(p => amIMemberOf(p) && !amIAttendeeOf(p) && !declinedPromiseIds.includes(p.id));
+    const joinedPromises = promisesList.filter(p => amIAttendeeOf(p));
 
-    // Render Invitations Section
-    if (invitedPromises.length > 0 && invitationSection && invitationsList) {
-      invitationSection.style.display = 'block';
+    invitedCount = invitedPromises.length;
+    updateInboxBadges();
+
+    // Render Invitations Section (바텀 시트 안에 렌더)
+    if (invitationsList) {
+      if (invitedPromises.length === 0) {
+        invitationsList.innerHTML = `<p style="color:var(--text-dim); text-align:center; padding:24px 12px; font-size:0.84rem;">초대받은 약속이 없습니다.</p>`;
+      }
 
       invitedPromises.forEach(p => {
         const invCard = document.createElement('div');
         invCard.className = 'card-item';
         invCard.style.borderColor = 'var(--yellow)';
-        invCard.style.background = 'rgba(253, 203, 110, 0.08)';
+        invCard.style.background = 'var(--yellow-soft)';
 
         const locationDisplay = p.venueName
           ? `<strong>${escapeHtml(p.venueName)}</strong> (${escapeHtml(p.location)})`
@@ -1625,13 +2254,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         invCard.innerHTML = `
           <div class="card-header-row">
-            <h3 class="card-title" style="color:#fdcb6e;">📩 ${escapeHtml(p.title)} (초대장)</h3>
+            <h3 class="card-title" style="color:var(--yellow);">📩 ${escapeHtml(p.title)} (초대장)</h3>
             <span class="badge wait">초대 대기중</span>
           </div>
           <div class="card-info">
-            <div class="card-info-item"><i data-lucide="user"></i> <strong>주최자:</strong> ${escapeHtml(p.hostName || '친구')}</div>
-            <div class="card-info-item"><i data-lucide="map-pin"></i> <strong>위치:</strong> ${locationDisplay}</div>
-            <div class="card-info-item"><i data-lucide="clock"></i> <strong>시간:</strong> ${escapeHtml(p.dateTime)}</div>
+            <div class="card-info-item"><i data-lucide="user"></i> <span class="ci-label">주최자</span> <span class="ci-value">${escapeHtml(p.hostName || '친구')}</span></div>
+            <div class="card-info-item"><i data-lucide="map-pin"></i> <span class="ci-label">위치</span> <span class="ci-value">${locationDisplay}</span></div>
+            <div class="card-info-item"><i data-lucide="clock"></i> <span class="ci-label">시간</span> <span class="ci-value">${escapeHtml(p.dateTime)}</span></div>
+            <div class="card-info-item"><i data-lucide="${p.penaltyType === 'vibrate' ? 'vibrate' : 'bell-ring'}"></i> <span class="ci-label">지각 벌칙</span> <span class="ci-value">${escapeHtml(penaltyLabel(p))}</span></div>
           </div>
           <div class="card-action-row" style="margin-top:10px;">
             <button class="btn-primary btn-join-invite" data-id="${escapeHtml(p.id)}" style="flex:1; background:var(--green);">
@@ -1651,9 +2281,9 @@ document.addEventListener('DOMContentLoaded', () => {
           const pId = e.currentTarget.getAttribute('data-id');
           const found = promisesList.find(item => item.id === pId);
           if (found) {
-            if (!found.participants.includes(myName)) found.participants.push(myName);
-            found.invitedUsers = (found.invitedUsers || []).filter(u => u !== myName);
-            syncPromisesToCloud(found);
+            writeMyAttendance(found);
+            declinedPromiseIds = declinedPromiseIds.filter(id => id !== pId);
+            saveStorage('pa_declined_promises', declinedPromiseIds);
             renderAll();
             alert(`🎉 "${found.title}" 약속 참가가 완료되었습니다!`);
           }
@@ -1665,20 +2295,18 @@ document.addEventListener('DOMContentLoaded', () => {
           const pId = e.currentTarget.getAttribute('data-id');
           const found = promisesList.find(item => item.id === pId);
           if (found) {
-            found.invitedUsers = (found.invitedUsers || []).filter(u => u !== myName);
-            syncPromisesToCloud(found);
+            detachMyselfFromPromise(found);
+            promisesList = promisesList.filter(item => item.id !== pId);
             renderAll();
           }
         });
       });
-    } else if (invitationSection) {
-      invitationSection.style.display = 'none';
     }
 
 
     // Render Joined Promises
     if (joinedPromises.length === 0) {
-      listContainer.innerHTML = `<p style="color:#888; text-align:center; padding:40px 20px;">등록된 약속이 없습니다.</p>`;
+      listContainer.innerHTML = `<p style="color: var(--text-dim); text-align:center; padding:40px 20px;">등록된 약속이 없습니다.</p>`;
       return;
     }
 
@@ -1686,8 +2314,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const card = document.createElement('div');
       card.className = 'card-item';
 
-      const participantsList = (p.participants && p.participants.length > 0) ? p.participants : [myName];
+      const participantsList = promiseParticipantNames(p).length > 0 ? promiseParticipantNames(p) : [myName];
       const friendPills = participantsList.map(name => `<span class="friend-pill">${escapeHtml(name)}</span>`).join('');
+      const isHostOfThis = amIHostOf(p);
 
 
       const mapButtonHtml = `
@@ -1724,16 +2353,18 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="card-header-row">
           <h3 class="card-title">${escapeHtml(p.title)}</h3>
           <div class="card-header-right">
-            <button class="btn-delete-promise btn-delete-trigger" data-id="${escapeHtml(p.id)}" title="약속 삭제">
+            ${isHostOfThis ? `<button class="btn-delete-promise btn-delete-trigger" data-id="${escapeHtml(p.id)}" title="약속 삭제 (호스트 전용)">
               <i data-lucide="trash-2"></i>
-            </button>
+            </button>` : ''}
           </div>
         </div>
         <div class="card-info">
-          <div class="card-info-item"><i data-lucide="map-pin"></i> <strong>위치:</strong> ${locationDisplay} <span style="color:#a0a7b5;">(${escapeHtml(distStr)})</span></div>
-          <div class="card-info-item"><i data-lucide="clock"></i> <strong>시간:</strong> ${escapeHtml(p.dateTime)}</div>
+          <div class="card-info-item"><i data-lucide="map-pin"></i> <span class="ci-label">위치</span> <span class="ci-value">${locationDisplay}</span> <span class="ci-tail">${escapeHtml(distStr)}</span></div>
+          <div class="card-info-item"><i data-lucide="clock"></i> <span class="ci-label">시간</span> <span class="ci-value">${escapeHtml(p.dateTime)}</span></div>
+          <div class="card-info-item"><i data-lucide="${p.penaltyType === 'vibrate' ? 'vibrate' : 'bell-ring'}"></i> <span class="ci-label">지각 벌칙</span> <span class="ci-value">${escapeHtml(penaltyLabel(p))}</span></div>
+          <div class="card-info-item"><i data-lucide="eye"></i> <span class="ci-label">위치 공개</span> <span class="ci-value">${escapeHtml(locationRevealLabel(p))}</span></div>
           <div style="margin-top:6px;">
-            <span style="font-size:0.75rem; color:#888;">참가자:</span>
+            <span style="font-size:0.75rem; color: var(--text-dim);">참가자:</span>
             <div class="friends-tags">${friendPills}</div>
           </div>
         </div>
@@ -1761,8 +2392,9 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.addEventListener('click', (e) => {
         const promiseId = e.currentTarget.getAttribute('data-id');
         if (confirm('이 약속을 삭제하시겠습니까?')) {
+          const target = promisesList.find(item => item.id === promiseId);
           promisesList = promisesList.filter(item => item.id !== promiseId);
-          removePromiseFromCloud(promiseId);
+          removePromiseFromCloud(promiseId, target);
           renderAll();
         }
       });
@@ -1775,13 +2407,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (found) {
           if (found.leaveRule === 'free') {
             if (confirm(`"${found.title}" 약속에서 즉시 나가시겠습니까?`)) {
-              found.participants = (found.participants || []).filter(n => n !== myName);
-              if (found.participants.length === 0) {
-                promisesList = promisesList.filter(p => p.id !== found.id);
-                removePromiseFromCloud(found.id);
-              } else {
-                syncPromisesToCloud(found);
-              }
+              leavePromise(found);
               renderAll();
               alert(`🚪 "${found.title}" 약속에서 나갔습니다.`);
             }
@@ -1803,10 +2429,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const consentContainer = document.getElementById('consentStatusList');
     consentContainer.innerHTML = '';
 
-    const otherParticipants = (promiseObj.participants || []).filter(name => name !== (userProfile?.name || '나'));
+    const otherParticipants = promiseParticipantNames(promiseObj).filter(name => name !== (userProfile?.name || '나'));
 
     if (otherParticipants.length === 0) {
-      consentContainer.innerHTML = `<div class="distance-item near"><span>다른 참가자가 없어 즉시 나갈 수 있습니다.</span><span style="color:#00b894;">✓ 승인됨</span></div>`;
+      consentContainer.innerHTML = `<div class="distance-item near"><span>다른 참가자가 없어 즉시 나갈 수 있습니다.</span><span style="color:var(--green);">✓ 승인됨</span></div>`;
     } else {
       otherParticipants.forEach(name => {
         const row = document.createElement('div');
@@ -1846,14 +2472,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       const myName = userProfile ? userProfile.name : '나';
-      activePromiseForLeave.participants = (activePromiseForLeave.participants || []).filter(n => n !== myName);
-
-      if (activePromiseForLeave.participants.length === 0) {
-        promisesList = promisesList.filter(p => p.id !== activePromiseForLeave.id);
-        removePromiseFromCloud(activePromiseForLeave.id);
-      } else {
-        syncPromisesToCloud(activePromiseForLeave);
-      }
+      leavePromise(activePromiseForLeave);
 
       leaveConsentModal.classList.remove('active');
       renderAll();
@@ -1870,6 +2489,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const targetTitle = promiseObj.venueName ? `${promiseObj.venueName} (${promiseObj.location})` : promiseObj.location;
     document.getElementById('mapTargetLocText').textContent = targetTitle;
     liveMapModal.classList.add('active');
+
+    // 약속 좌표는 생성 시 지도에서 찍은 값이 정답이다. 주소 재검색으로 덮어쓰지 않는다.
+    if (Number.isFinite(promiseObj.lat) && Number.isFinite(promiseObj.lng)) {
+      renderZenlyLiveMap(promiseObj, promiseObj.lat, promiseObj.lng);
+      return;
+    }
 
     fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(promiseObj.location)}&limit=1`)
       .then(res => res.json())
@@ -1911,24 +2536,25 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
 
-      // Draw light green translucent circle for arrival radius
-      const arrivalRadius = promiseObj.arrivalRadiusMeters || 300;
+      // 도착 인정 반경: 옅은 초록 원
+      const arrivalRadius = promiseObj.arrivalRadiusMeters || 200;
       L.circle([venueLat, venueLng], {
         radius: arrivalRadius,
-        color: '#10b981',
-        fillColor: '#10b981',
-        fillOpacity: 0.18,
-        weight: 2
+        color: '#22c55e',
+        fillColor: '#22c55e',
+        fillOpacity: 0.12,
+        weight: 1.5,
+        opacity: 0.5
       }).addTo(leafletMapInstance);
 
-      const labelText = promiseObj.venueName
-        ? `<b>${escapeHtml(promiseObj.venueName)}</b><br>${escapeHtml(promiseObj.location)}`
-        : `<b>${escapeHtml(promiseObj.location)}</b><br>약속 장소`;
+      // 약속 장소: 깔끔한 깃발 마커
+      addVenueFlagMarker(promiseObj, venueLat, venueLng);
 
-      L.marker([venueLat, venueLng])
-        .addTo(leafletMapInstance)
-        .bindPopup(labelText)
-        .openPopup();
+      // 공개 시점 전에는 장소만 보여주고 참가자 개인정보(위치·GPS·거리)는 노출하지 않는다.
+      if (!isLocationRevealed(promiseObj)) {
+        renderLocationHiddenPanel(promiseObj);
+        return;
+      }
 
       const myName = userProfile ? userProfile.name : '나';
       const myAvatar = userProfile ? userProfile.avatar : DEFAULT_AVATAR;
@@ -1954,7 +2580,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // 참가자(나 제외)는 클라우드에 공유된 실제 위치를 읽어온다.
       // 공유 데이터가 없으면 좌표를 꾸며내지 않고 '위치 공유 안 함'으로 표시한다.
-      const friendNames = (promiseObj.participants || []).filter(n => n !== myName);
+      const friendNames = promiseParticipantNames(promiseObj).filter(n => n !== myName);
 
       friendNames.forEach((fName) => {
         const friendMeta = friendsList.find(f => f && f.name === fName);
@@ -1991,96 +2617,181 @@ document.addEventListener('DOMContentLoaded', () => {
           friendObj.isGpsConnected = !!loc.updatedAt && (Date.now() - loc.updatedAt) < 5 * 60 * 1000;
 
           addCustomAvatarMarkerToMap(friendObj);
-          renderArrivalGroupSplit(promiseObj, allParticipants);
+          renderMapParticipants(promiseObj, allParticipants);
         }, () => {});
       });
 
-      renderMapCarousel(allParticipants);
-      renderArrivalGroupSplit(promiseObj, allParticipants);
+      renderMapParticipants(promiseObj, allParticipants);
       selectMapParticipant(meParticipantObj);
 
     }, 100);
   }
 
-  // RENDER ARRIVAL SPLIT
-  function renderArrivalGroupSplit(promiseObj, participants) {
-    const container = document.getElementById('arrivalGroupSection');
-    if (!container) return;
-    container.innerHTML = '';
+  // 실시간 위치 공개 시점 판정
+  //   locationRevealMin === 0 이면 항상 공개, 그 외에는 약속 시간 N분 전부터 공개.
+  function isLocationRevealed(promiseObj) {
+    const min = Number(promiseObj && promiseObj.locationRevealMin) || 0;
+    if (min <= 0) return true;
+    const target = Number(promiseObj && promiseObj.targetTimestamp);
+    if (!Number.isFinite(target)) return true;
+    return Date.now() >= target - min * 60 * 1000;
+  }
 
-    const radius = promiseObj.arrivalRadiusMeters || 300;
-    const arrivedList = [];
-    const unarrivedList = [];
+  function locationRevealLabel(promiseObj) {
+    const min = Number(promiseObj && promiseObj.locationRevealMin) || 0;
+    if (min <= 0) return '항상 공개';
+    if (min % 1440 === 0) return `약속 ${min / 1440}일 전부터`;
+    if (min % 60 === 0) return `약속 ${min / 60}시간 전부터`;
+    return `약속 ${min}분 전부터`;
+  }
 
-    participants.forEach(p => {
-      // 공유된 좌표가 없으면 거리를 추정하지 않는다.
-      if (!Number.isFinite(p.lat) || !Number.isFinite(p.lng)) {
-        unarrivedList.push({ ...p, distStr: p.isMe ? '위치 확인 중' : '위치 공유 안 함' });
-        return;
-      }
+  // 테마 CSS 변수의 실제 색상값 (Leaflet 은 SVG 속성이라 var() 를 못 쓴다)
+  function themeColorValue(varName, fallback) {
+    try {
+      const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+      return v || fallback;
+    } catch (e) {
+      return fallback;
+    }
+  }
 
-      const dist = calculateHaversineDistance(p.lat, p.lng, p.venueLat, p.venueLng);
-      const distStr = dist > 1000 ? `${(dist / 1000).toFixed(1)}km` : `${Math.round(dist)}m`;
+  // 약속 장소 깃발 마커 (빨간 깃발, 이모지 없이 SVG)
+  function addVenueFlagMarker(promiseObj, lat, lng) {
+    const flagColor = '#ef4444';
+    const poleColor = themeColorValue('--text-main', '#ffffff');
+    const label = promiseObj.venueName || promiseObj.location || '약속 장소';
 
-      if (p.isGpsConnected && dist <= radius) {
-        arrivedList.push({ ...p, distStr });
-      } else {
-        unarrivedList.push({ ...p, distStr: p.isGpsConnected ? distStr : `${distStr} · 오프라인` });
-      }
-    });
-
-    const box = document.createElement('div');
-    box.style.display = 'grid';
-    box.style.gridTemplateColumns = '1fr 1fr';
-    box.style.gap = '8px';
-
-    const arrivedItemsHtml = arrivedList.length > 0 
-      ? arrivedList.map(a => `
-          <div style="display:flex; align-items:center; gap:6px; background:rgba(0,184,148,0.12); border:1px solid rgba(0,184,148,0.3); padding:5px 8px; border-radius:8px;">
-            <img src="${safeImageUrl(a.avatar)}" style="width:22px; height:22px; border-radius:50%;">
-            <span style="font-size:0.75rem; color:#fff; font-weight:600;">${escapeHtml(a.name)}</span>
-            <span style="font-size:0.68rem; color:#00b894; margin-left:auto;">${escapeHtml(a.distStr)}</span>
-          </div>
-        `).join('')
-      : `<p style="font-size:0.72rem; color:#888; margin:2px 0;">아직 도착자 없음</p>`;
-
-    const unarrivedItemsHtml = unarrivedList.length > 0
-      ? unarrivedList.map(u => `
-          <div style="display:flex; align-items:center; gap:6px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); padding:5px 8px; border-radius:8px;">
-            <img src="${safeImageUrl(u.avatar)}" style="width:22px; height:22px; border-radius:50%;">
-            <span style="font-size:0.75rem; color:#fff; font-weight:600;">${escapeHtml(u.name)}</span>
-            <span style="font-size:0.68rem; color:#ff7675; margin-left:auto;">${escapeHtml(u.distStr)}</span>
-          </div>
-        `).join('')
-      : `<p style="font-size:0.72rem; color:#00b894; margin:2px 0;">모두 도착 완료</p>`;
-
-    box.innerHTML = `
-      <div style="background:rgba(0,0,0,0.25); padding:8px; border-radius:10px; border:1px solid rgba(0,184,148,0.2);">
-        <span style="font-size:0.75rem; color:#00b894; font-weight:bold; display:block; margin-bottom:6px;">
-          도착함 (${arrivedList.length}명)
-        </span>
-        <div style="display:flex; flex-direction:column; gap:4px;">${arrivedItemsHtml}</div>
-      </div>
-
-      <div style="background:rgba(0,0,0,0.25); padding:8px; border-radius:10px; border:1px solid rgba(255,118,117,0.2);">
-        <span style="font-size:0.75rem; color:#ff7675; font-weight:bold; display:block; margin-bottom:6px;">
-          미도착 / GPS 꺼짐 (${unarrivedList.length}명)
-        </span>
-        <div style="display:flex; flex-direction:column; gap:4px;">${unarrivedItemsHtml}</div>
+    const html = `
+      <div class="venue-flag-marker">
+        <svg width="26" height="34" viewBox="0 0 26 34" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M6 2.5V32" stroke="${poleColor}" stroke-width="2.4" stroke-linecap="round"/>
+          <path d="M6 3.5H20.5L16.5 9.5L20.5 15.5H6V3.5Z" fill="${flagColor}"/>
+          <circle cx="6" cy="32" r="2.4" fill="${flagColor}"/>
+        </svg>
+        <span class="venue-flag-label">${escapeHtml(label)}</span>
       </div>
     `;
 
-    container.appendChild(box);
+    const icon = L.divIcon({
+      html: html,
+      className: '',
+      // 아바타 마커와 같은 방식으로 "깃대 밑동"을 좌표에 고정한다.
+      iconSize: [140, 56],
+      iconAnchor: [63, 34]
+    });
+
+    L.marker([lat, lng], { icon: icon, interactive: false, zIndexOffset: -100 }).addTo(leafletMapInstance);
   }
 
-  // PERFECT CIRCULAR LEAFLET AVATAR MARKERS
+  // 위치 공개 전 화면: 장소만 표시하고 참가자 정보는 감춘다.
+  function renderLocationHiddenPanel(promiseObj) {
+    const listEl = document.getElementById('mapParticipantList');
+    const countEl = document.getElementById('mapArrivalCount');
+    const infoEl = document.getElementById('mapSelectedInfo');
+
+    if (countEl) countEl.textContent = '위치 공개 전';
+    if (listEl) {
+      listEl.innerHTML = `
+        <div style="text-align:center; padding:22px 12px;">
+          <div style="font-size:0.86rem; font-weight:700; color:var(--text-main);">🔒 참가자 위치는 아직 공개되지 않았습니다</div>
+          <div style="font-size:0.76rem; color:var(--text-muted); margin-top:6px;">${escapeHtml(locationRevealLabel(promiseObj))} 실시간 위치·거리·GPS 상태가 표시됩니다.</div>
+        </div>
+      `;
+    }
+    if (infoEl) infoEl.textContent = '약속 장소만 표시 중입니다.';
+  }
+
+  // 참가자 목록 + 도착 요약 (하단 패널 단일 소스)
+  function renderMapParticipants(promiseObj, participants) {
+    const listEl = document.getElementById('mapParticipantList');
+    const countEl = document.getElementById('mapArrivalCount');
+    if (!listEl) return;
+
+    const radius = promiseObj.arrivalRadiusMeters || 300;
+
+    const rows = participants.map((p) => {
+      const hasCoords = Number.isFinite(p.lat) && Number.isFinite(p.lng);
+      let distMeters = null;
+      if (hasCoords && Number.isFinite(p.venueLat) && Number.isFinite(p.venueLng)) {
+        distMeters = calculateHaversineDistance(p.lat, p.lng, p.venueLat, p.venueLng);
+      }
+
+      const arrived = distMeters != null && p.isGpsConnected && distMeters <= radius;
+      let distStr = '-';
+      if (distMeters != null) {
+        distStr = distMeters > 1000 ? `${(distMeters / 1000).toFixed(1)}km` : `${Math.round(distMeters)}m`;
+      }
+
+      // 간략 표기: 도착 / 이동 중 / 꺼짐 / 위치 없음
+      let state;
+      let stateClass;
+      if (!hasCoords) {
+        state = '위치 없음';
+        stateClass = 'state-offline';
+      } else if (!p.isGpsConnected) {
+        state = '꺼짐';
+        stateClass = 'state-offline';
+      } else if (arrived) {
+        state = '도착';
+        stateClass = 'state-online';
+      } else {
+        state = '이동 중';
+        stateClass = 'state-online';
+      }
+
+      return { p, arrived, distStr, state, stateClass };
+    });
+
+    // 도착한 사람을 위로
+    rows.sort((a, b) => (b.arrived ? 1 : 0) - (a.arrived ? 1 : 0));
+
+    if (countEl) {
+      const arrivedCount = rows.filter(r => r.arrived).length;
+      countEl.textContent = `${arrivedCount}/${rows.length} 도착`;
+    }
+
+    listEl.innerHTML = '';
+    rows.forEach(({ p, arrived, distStr, state, stateClass }) => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = `map-participant-row ${arrived ? 'arrived' : ''}`;
+      row.setAttribute('data-name', p.name);
+      if (selectedMapParticipant && selectedMapParticipant.name === p.name) row.classList.add('selected');
+
+      row.innerHTML = `
+        <img src="${safeImageUrl(p.avatar)}" alt="">
+        <span class="mp-main">
+          <span class="mp-name">${escapeHtml(p.name)}${p.isMe ? ' (나)' : ''}</span>
+        </span>
+        <span class="mp-right">
+          <span class="mp-dist">${escapeHtml(distStr)}</span>
+          <span class="mp-state ${stateClass}">${escapeHtml(state)}</span>
+        </span>
+      `;
+
+      row.addEventListener('click', () => {
+        listEl.querySelectorAll('.map-participant-row').forEach(el => el.classList.remove('selected'));
+        row.classList.add('selected');
+        selectMapParticipant(p);
+      });
+
+      listEl.appendChild(row);
+    });
+
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  // 참가자 아바타 마커 (연결됨=초록 테두리 / 꺼짐=빨강 테두리 + 마지막 위치)
   function addCustomAvatarMarkerToMap(participantObj) {
+    const online = !!participantObj.isGpsConnected;
+    const ringColor = online ? '#22c55e' : '#ef4444';
+
     const avatarHtml = `
       <div class="custom-map-avatar-container">
-        <div class="custom-map-avatar-ring" style="background: ${participantObj.isGpsConnected ? '#6c5ce7' : '#ff7675'}; border: 2px solid ${participantObj.isGpsConnected ? '#00b894' : '#ff7675'};">
-          <img src="${safeImageUrl(participantObj.avatar)}" class="custom-map-avatar-img" style="${!participantObj.isGpsConnected ? 'filter:grayscale(80%);' : ''}">
+        <div class="custom-map-avatar-ring" style="background:${ringColor}; border:2px solid ${ringColor};">
+          <img src="${safeImageUrl(participantObj.avatar)}" class="custom-map-avatar-img" style="${online ? '' : 'filter:grayscale(90%);'}">
         </div>
-        <div class="custom-map-avatar-badge">${escapeHtml(participantObj.name)}</div>
+        <div class="custom-map-avatar-badge" style="border-color:${ringColor};">${escapeHtml(participantObj.name)}${online ? '' : ' · 꺼짐'}</div>
       </div>
     `;
 
@@ -2098,31 +2809,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  function renderMapCarousel(participants) {
-    const carouselContainer = document.getElementById('mapFriendsCarousel');
-    if (!carouselContainer) return;
-    carouselContainer.innerHTML = '';
-
-    participants.forEach((p, idx) => {
-      const item = document.createElement('div');
-      item.className = `carousel-friend-item ${idx === 0 ? 'active' : ''}`;
-      item.setAttribute('data-name', p.name);
-
-      item.innerHTML = `
-        <img src="${safeImageUrl(p.avatar)}" class="carousel-friend-avatar">
-        <span class="carousel-friend-name">${escapeHtml(p.name)}</span>
-      `;
-
-      item.addEventListener('click', () => {
-        document.querySelectorAll('.carousel-friend-item').forEach(el => el.classList.remove('active'));
-        item.classList.add('active');
-        selectMapParticipant(p);
-      });
-
-      carouselContainer.appendChild(item);
-    });
-  }
-
   function selectMapParticipant(pObj) {
     selectedMapParticipant = pObj;
     if (leafletMapInstance && Number.isFinite(pObj.lat) && Number.isFinite(pObj.lng)) {
@@ -2131,53 +2817,33 @@ document.addEventListener('DOMContentLoaded', () => {
     updateGpsStatusView(pObj);
   }
 
-  // 위치 연결 상태 / 거리 표시 (실제 상태 기반)
+  // 선택한 참가자 상세: 한 줄 요약으로 표시 (GPS 상태 · 수신 시각 · 목적지 거리)
   function updateGpsStatusView(pObj) {
-    document.getElementById('detailFriendAvatar').src = pObj.avatar || DEFAULT_AVATAR;
-    document.getElementById('detailFriendName').textContent = pObj.name;
-    document.getElementById('detailFriendAddress').textContent = pObj.address || '위치 수신 중...';
+    const infoEl = document.getElementById('mapSelectedInfo');
+    if (!infoEl || !pObj) return;
 
     const hasCoords = Number.isFinite(pObj.lat) && Number.isFinite(pObj.lng);
-    const statusEl = document.getElementById('statGpsStatus');
-    if (statusEl) {
-      if (!hasCoords) {
-        statusEl.textContent = pObj.isMe ? '위치 확인 중' : '위치 공유 안 함';
-        statusEl.className = 'stat-val';
-      } else if (pObj.isGpsConnected && pObj.source !== 'ip') {
-        statusEl.textContent = pObj.accuracy != null ? `연결됨 (±${pObj.accuracy}m)` : '연결됨';
-        statusEl.className = 'stat-val text-green';
-      } else if (pObj.source === 'ip') {
-        statusEl.textContent = 'IP 대략 위치';
-        statusEl.className = 'stat-val';
-      } else {
-        statusEl.textContent = '오프라인';
-        statusEl.className = 'stat-val';
-      }
+
+    // GPS 표기는 연결됨 / 연결 안됨만 (오차범위 표기 없음)
+    const gpsHtml = (hasCoords && pObj.isGpsConnected)
+      ? '<span class="state-online">연결됨</span>'
+      : '<span class="state-offline">연결 안됨</span>';
+
+    let updatedText = '수신 기록 없음';
+    if (pObj.lastGpsConnectedTs) {
+      const diffMins = Math.floor((Date.now() - pObj.lastGpsConnectedTs) / 60000);
+      if (diffMins < 1) updatedText = '방금 전 수신';
+      else if (diffMins < 60) updatedText = `${diffMins}분 전 수신`;
+      else updatedText = `${Math.floor(diffMins / 60)}시간 전 수신`;
     }
 
-    const updatedEl = document.getElementById('statUpdated');
-    if (updatedEl) {
-      if (!pObj.lastGpsConnectedTs) {
-        updatedEl.textContent = '-';
-      } else {
-        const diffMins = Math.floor((Date.now() - pObj.lastGpsConnectedTs) / 60000);
-        if (diffMins < 1) updatedEl.textContent = '방금 전';
-        else if (diffMins < 60) updatedEl.textContent = `${diffMins}분 전`;
-        else updatedEl.textContent = `${Math.floor(diffMins / 60)}시간 전`;
-      }
+    let distText = '거리 -';
+    if (hasCoords && Number.isFinite(pObj.venueLat) && Number.isFinite(pObj.venueLng)) {
+      const d = calculateHaversineDistance(pObj.lat, pObj.lng, pObj.venueLat, pObj.venueLng);
+      distText = d > 1000 ? `약속 장소까지 ${(d / 1000).toFixed(1)}km` : `약속 장소까지 ${Math.round(d)}m`;
     }
 
-    const distEl = document.getElementById('statDistance');
-    if (distEl) {
-      if (!hasCoords || !Number.isFinite(pObj.venueLat) || !Number.isFinite(pObj.venueLng)) {
-        distEl.textContent = '-';
-      } else {
-        const distMeters = calculateHaversineDistance(pObj.lat, pObj.lng, pObj.venueLat, pObj.venueLng);
-        distEl.textContent = distMeters > 1000
-          ? `${(distMeters / 1000).toFixed(1)} km`
-          : `${Math.round(distMeters)} m`;
-      }
-    }
+    infoEl.innerHTML = `${escapeHtml(pObj.name)}${pObj.isMe ? ' (나)' : ''} · ${gpsHtml} · ${escapeHtml(updatedText)} · ${escapeHtml(distText)}`;
   }
 
 
@@ -2210,7 +2876,7 @@ document.addEventListener('DOMContentLoaded', () => {
     listContainer.innerHTML = '';
 
     if (friendsList.length === 0) {
-      listContainer.innerHTML = `<p style="color:#888; text-align:center; padding:40px 20px;">등록된 친구가 없습니다.</p>`;
+      listContainer.innerHTML = `<p style="color: var(--text-dim); text-align:center; padding:40px 20px;">등록된 친구가 없습니다.</p>`;
       return;
     }
 
@@ -2223,13 +2889,50 @@ document.addEventListener('DOMContentLoaded', () => {
           <img src="${safeImageUrl(f.avatar)}" class="avatar-circle">
           <div>
             <div class="friend-name">${escapeHtml(f.name)}</div>
-            <div class="friend-sub">📍 ${escapeHtml(f.homeLoc ? f.homeLoc : '친구')}</div>
           </div>
         </div>
+        <button class="btn-delete-promise btn-delete-friend" data-code="${escapeHtml(f.code || '')}" title="친구 삭제" aria-label="${escapeHtml(f.name)} 친구 삭제">
+          <i data-lucide="user-minus"></i>
+        </button>
       `;
       listContainer.appendChild(card);
     });
+
+    listContainer.querySelectorAll('.btn-delete-friend').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const code = e.currentTarget.getAttribute('data-code');
+        const target = friendsList.find(f => (f.code || '') === code);
+        if (!target) return;
+        if (!confirm(`${target.name} 님을 친구 목록에서 삭제하시겠습니까?\n\n서로의 친구 목록에서 모두 사라지며, 상대방에게는 별도 알림이 가지 않습니다.`)) return;
+        deleteFriend(target);
+      });
+    });
+
     if (window.lucide) window.lucide.createIcons();
+  }
+
+  // 친구 삭제: 양쪽 목록에서 동시에 제거한다.
+  //   - 내 목록: user_friends/{내키}/{친구키}
+  //   - 상대 목록: user_friends/{친구키}/{내키}  (규칙상 "내 항목 삭제"만 허용)
+  //   상대방에게 알림은 보내지 않는다.
+  function deleteFriend(friendObj) {
+    if (!friendObj) return;
+    const fKey = codeKey(friendObj.code);
+    friendsList = friendsList.filter(f => codeKey(f && f.code) !== fKey);
+    saveStorage('pa_friends_list', friendsList);
+
+    const myKey = codeKey(ensureUserCode());
+    if (dbRef && myKey && fKey) {
+      dbWrite('user_friends/' + myKey + '/' + fKey, null);
+      dbWrite('user_friends/' + fKey + '/' + myKey, null);
+      // 남아 있던 친구 요청 흔적도 함께 정리
+      dbWrite('friend_requests/' + myKey + '/' + fKey, null);
+      dbWrite('friend_requests/' + fKey + '/' + myKey, null);
+    }
+
+    renderFriends();
+    populateFriendSelector();
+    alert(`🗑️ ${friendObj.name} 님을 친구 목록에서 삭제했습니다.`);
   }
 
 
@@ -2256,28 +2959,177 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnCloseCreatePromise) btnCloseCreatePromise.addEventListener('click', () => createPromiseModal.classList.remove('active'));
   if (btnCancelCreatePromise) btnCancelCreatePromise.addEventListener('click', () => createPromiseModal.classList.remove('active'));
 
+  // ==========================================
+  // 참가 친구 선택 (별도 모달 + 검색 + 스크롤)
+  //   선택 상태는 친구 코드 기준으로 보관한다.
+  // ==========================================
+  let selectedInviteCodes = [];
+  let friendPickerQuery = '';
+
+  const friendPickerModal = document.getElementById('friendPickerModal');
+  const btnOpenFriendPicker = document.getElementById('btnOpenFriendPicker');
+  const btnCloseFriendPicker = document.getElementById('btnCloseFriendPicker');
+  const btnConfirmFriendPicker = document.getElementById('btnConfirmFriendPicker');
+  const btnFriendPickerSelectAll = document.getElementById('btnFriendPickerSelectAll');
+  const btnFriendPickerClearAll = document.getElementById('btnFriendPickerClearAll');
+  const inputFriendPickerSearch = document.getElementById('inputFriendPickerSearch');
+
+  function friendByCode(code) {
+    return friendsList.find(f => (f.code || '') === code) || null;
+  }
+
+  // 삭제된 친구가 선택 목록에 남지 않도록 정리
+  function pruneSelectedInviteCodes() {
+    selectedInviteCodes = selectedInviteCodes.filter(c => !!friendByCode(c));
+  }
+
+  // 약속 만들기 화면의 요약(선택 인원 + 칩 미리보기)
   function populateFriendSelector() {
-    const container = document.getElementById('friendSelectorList');
+    pruneSelectedInviteCodes();
+
+    const badge = document.getElementById('friendPickerCountBadge');
+    if (badge) badge.textContent = `${selectedInviteCodes.length}명`;
+
+    const preview = document.getElementById('selectedFriendsPreview');
+    if (preview) {
+      preview.innerHTML = '';
+      if (friendsList.length === 0) {
+        preview.innerHTML = `<span style="font-size:0.76rem; color:var(--text-muted);">등록된 친구가 없습니다. 친구 관리 탭에서 먼저 추가해 주세요.</span>`;
+      } else if (selectedInviteCodes.length === 0) {
+        preview.innerHTML = `<span style="font-size:0.76rem; color:var(--text-muted);">선택된 친구가 없습니다.</span>`;
+      } else {
+        selectedInviteCodes.forEach(code => {
+          const f = friendByCode(code);
+          if (!f) return;
+          const chip = document.createElement('span');
+          chip.className = 'friend-chip selected';
+          chip.textContent = `✓ ${f.name}`;
+          preview.appendChild(chip);
+        });
+      }
+    }
+
+    if (friendPickerModal && friendPickerModal.classList.contains('active')) renderFriendPickerList();
+  }
+
+  function renderFriendPickerList() {
+    const container = document.getElementById('friendPickerList');
+    const countEl = document.getElementById('friendPickerSelectedCount');
+    if (countEl) countEl.textContent = `${selectedInviteCodes.length}명 선택됨`;
     if (!container) return;
+
     container.innerHTML = '';
 
     if (friendsList.length === 0) {
+      container.innerHTML = `<p style="color: var(--text-dim); text-align:center; padding:24px 12px; font-size:0.82rem;">등록된 친구가 없습니다.<br>친구 관리 탭에서 친구를 먼저 추가해 주세요.</p>`;
       return;
     }
 
-    friendsList.forEach(f => {
-      const chip = document.createElement('div');
-      chip.className = 'friend-chip selected';
-      chip.setAttribute('data-name', f.name);
-      chip.textContent = `✓ ${f.name}`;
+    const q = friendPickerQuery.trim().toLowerCase();
+    const visible = q
+      ? friendsList.filter(f => String(f.name || '').toLowerCase().includes(q))
+      : friendsList;
 
-      chip.addEventListener('click', () => {
-        chip.classList.toggle('selected');
-        chip.textContent = chip.classList.contains('selected') ? `✓ ${f.name}` : f.name;
+    if (visible.length === 0) {
+      container.innerHTML = `<p style="color: var(--text-dim); text-align:center; padding:24px 12px; font-size:0.82rem;">"${escapeHtml(friendPickerQuery)}" 검색 결과가 없습니다.</p>`;
+      return;
+    }
+
+    visible.forEach(f => {
+      const code = f.code || '';
+      const isSelected = selectedInviteCodes.includes(code);
+
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = `friend-picker-row ${isSelected ? 'selected' : ''}`;
+      row.setAttribute('data-code', code);
+      row.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+      row.innerHTML = `
+        <img src="${safeImageUrl(f.avatar)}" alt="">
+        <span>
+          <span class="picker-name" style="display:block;">${escapeHtml(f.name)}</span>
+          ${f.uid ? '' : `<span class="picker-sub">계정 정보 없음 (초대 불가)</span>`}
+        </span>
+        <span class="picker-check" aria-hidden="true">✓</span>
+      `;
+
+      row.addEventListener('click', () => {
+        if (selectedInviteCodes.includes(code)) {
+          selectedInviteCodes = selectedInviteCodes.filter(c => c !== code);
+        } else {
+          selectedInviteCodes.push(code);
+        }
+        renderFriendPickerList();
       });
-      container.appendChild(chip);
+
+      container.appendChild(row);
     });
   }
+
+  function openFriendPicker() {
+    if (!friendPickerModal) return;
+    friendPickerQuery = '';
+    if (inputFriendPickerSearch) inputFriendPickerSearch.value = '';
+    createPromiseModal.classList.remove('active');
+    friendPickerModal.classList.add('active');
+    renderFriendPickerList();
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  function closeFriendPicker() {
+    if (friendPickerModal) friendPickerModal.classList.remove('active');
+    createPromiseModal.classList.add('active');
+    populateFriendSelector();
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  if (btnOpenFriendPicker) btnOpenFriendPicker.addEventListener('click', openFriendPicker);
+  if (btnCloseFriendPicker) btnCloseFriendPicker.addEventListener('click', closeFriendPicker);
+  if (btnConfirmFriendPicker) btnConfirmFriendPicker.addEventListener('click', closeFriendPicker);
+
+  if (btnFriendPickerSelectAll) {
+    btnFriendPickerSelectAll.addEventListener('click', () => {
+      selectedInviteCodes = friendsList.map(f => f.code || '').filter(Boolean);
+      renderFriendPickerList();
+    });
+  }
+
+  if (btnFriendPickerClearAll) {
+    btnFriendPickerClearAll.addEventListener('click', () => {
+      selectedInviteCodes = [];
+      renderFriendPickerList();
+    });
+  }
+
+  if (inputFriendPickerSearch) {
+    inputFriendPickerSearch.addEventListener('input', (e) => {
+      friendPickerQuery = e.target.value || '';
+      renderFriendPickerList();
+    });
+  }
+
+  // 벌칙 종류/지속 시간 선택에 따른 안내 문구
+  function updatePenaltyHint() {
+    const hintEl = document.getElementById('penaltyHintText');
+    const typeEl = document.getElementById('selectPenaltyType');
+    const durEl = document.getElementById('selectPenaltyDuration');
+    if (!hintEl || !typeEl || !durEl) return;
+
+    const isVibrate = typeEl.value === 'vibrate';
+    const min = parseInt(durEl.value, 10) || 0;
+    const what = isVibrate ? '진동' : '알람 소리';
+    const when = min > 0
+      ? `약속 시간 후 ${min}분간 ${what}가 반복됩니다.`
+      : `도착할 때까지 ${what}가 계속 반복됩니다.`;
+
+    hintEl.textContent = `${when} 도착 반경에 들어오면 즉시 멈춥니다.${isVibrate ? ' (아이폰 사파리는 진동을 지원하지 않아 화면 경고만 표시됩니다)' : ''}`;
+  }
+
+  ['selectPenaltyType', 'selectPenaltyDuration'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', updatePenaltyHint);
+  });
+  updatePenaltyHint();
 
   if (formCreatePromise) {
     formCreatePromise.addEventListener('submit', (e) => {
@@ -2287,10 +3139,22 @@ document.addEventListener('DOMContentLoaded', () => {
       const venueName = document.getElementById('inputPromiseVenueName').value.trim();
       const dateTimeVal = document.getElementById('inputPromiseTime').value;
       const leaveRule = document.getElementById('selectLeaveRule').value;
-      const arrivalRadiusMeters = parseInt(document.getElementById('inputAutoArrivalDist').value) || 300;
+      const revealEl = document.getElementById('selectLocationReveal');
+      const locationRevealMin = revealEl ? (parseInt(revealEl.value, 10) || 0) : 0;
+      const penaltySelectEl = document.getElementById('selectPenaltyType');
+      const penaltyType = penaltySelectEl && penaltySelectEl.value === 'vibrate' ? 'vibrate' : 'alarm';
+      const penaltyDurationEl = document.getElementById('selectPenaltyDuration');
+      const penaltyDurationMin = penaltyDurationEl ? (parseInt(penaltyDurationEl.value, 10) || 0) : 0;
+      const arrivalRadiusMeters = parseInt(document.getElementById('inputAutoArrivalDist').value) || 200;
 
       if (!title || !location || !dateTimeVal) {
         alert('약속 이름, 위치, 시간을 모두 입력해 주세요.');
+        return;
+      }
+
+      // 약속 장소는 지도에서 직접 찍은 좌표만 인정한다. (주소 검색 오차로 엉뚱한 곳이 잡히는 문제 방지)
+      if (!Number.isFinite(selectedPickedLat) || !Number.isFinite(selectedPickedLng)) {
+        alert('📍 약속 장소는 지도에서 직접 선택해야 합니다.\n\n[지도 선택] 버튼을 눌러 위치를 찍어주세요.');
         return;
       }
 
@@ -2304,12 +3168,15 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      const selectedChips = document.querySelectorAll('.friend-chip.selected');
-      let selectedFriendNames = Array.from(selectedChips).map(c => c.getAttribute('data-name'));
+      pruneSelectedInviteCodes();
+      const selectedFriendCodes = selectedInviteCodes.slice();
+      const invitedFriendObjs = friendsList.filter(f => selectedFriendCodes.indexOf(f.code || '') !== -1);
+      const selectedFriendNames = invitedFriendObjs.map(f => f.name);
 
       const myName = userProfile ? userProfile.name : '나';
-      const participantsList = [myName];
       const invitedList = selectedFriendNames.filter(n => n !== myName);
+      const myUidForPromise = ensureProfileUid() || '';
+      const missingUidNames = invitedFriendObjs.filter(f => !f.uid).map(f => f.name);
 
       const dateObj = new Date(dateTimeVal);
       const targetTs = dateObj.getTime();
@@ -2328,36 +3195,44 @@ document.addEventListener('DOMContentLoaded', () => {
         targetTimestamp: targetTs,
         dateTime: dateStr,
         leaveRule: leaveRule,
+        locationRevealMin: locationRevealMin,
+        penaltyType: penaltyType,
+        penaltyDurationMin: penaltyDurationMin,
         hostName: myName,
-        hostUid: ensureProfileUid() || '',
+        hostUid: myUidForPromise,
         arrivalRadiusMeters: arrivalRadiusMeters,
         lat: venueLat,
         lng: venueLng,
-        participants: participantsList,
         invitedUsers: invitedList,
-        checkedIn: false,
+        // 참가 상태는 uid 별 노드로 관리한다. (본인만 자기 노드를 쓸 수 있음)
+        attendees: myUidForPromise ? {
+          [myUidForPromise]: {
+            uid: myUidForPromise,
+            name: myName,
+            avatar: (userProfile && userProfile.avatar) || DEFAULT_AVATAR,
+            joinedAt: Date.now(),
+            arrived: false
+          }
+        } : {},
+        // 읽기 권한의 기준: 여기 uid 가 있는 사람만 이 약속을 볼 수 있다.
+        members: buildMembersMap(myUidForPromise, invitedFriendObjs),
         createdAt: Date.now()
       };
 
+      if (missingUidNames.length > 0) {
+        alert(`⚠️ 다음 친구는 계정 정보(uid)가 없어 약속을 공유할 수 없습니다: ${missingUidNames.join(', ')}\n\n해당 친구가 로그인 후 친구 추가를 다시 진행하면 초대할 수 있습니다.`);
+      }
+
       selectedPickedLat = null;
       selectedPickedLng = null;
-
-      fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location)}&limit=1`)
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.length > 0) {
-            newPromise.lat = parseFloat(data[0].lat);
-            newPromise.lng = parseFloat(data[0].lon);
-            syncPromisesToCloud(newPromise);
-            renderPromises();
-          }
-        }).catch(() => {});
 
       promisesList.unshift(newPromise);
       syncPromisesToCloud(newPromise);
       document.getElementById('inputPromiseTitle').value = '';
       document.getElementById('inputPromiseLocation').value = '';
       document.getElementById('inputPromiseVenueName').value = '';
+      selectedInviteCodes = [];
+      populateFriendSelector();
       createPromiseModal.classList.remove('active');
       renderAll();
       alert(`🎉 "${title}" 약속이 등록되었으며, 선택한 친구들에게 초대가 전송되었습니다!`);
@@ -2377,15 +3252,218 @@ document.addEventListener('DOMContentLoaded', () => {
     arrivedNotified.push(promiseObj.id);
     saveStorage('pa_arrived_promises', arrivedNotified);
 
-    if (!promiseObj.checkedIn) {
-      promiseObj.checkedIn = true;
-      syncPromisesToCloud(promiseObj);
+    // 도착 상태는 내 attendees 노드에만 기록한다. (약속 본문은 호스트 전용)
+    writeMyAttendance(promiseObj, { arrived: true, arrivedAt: Date.now() });
+
+    // 도착하면 지각 벌칙(알람/진동)을 즉시 중지
+    evaluatePenaltyState();
+  }
+
+  // ==========================================
+  // 8. 지각 벌칙 엔진
+  //    약속 정각이 지났는데 아직 도착하지 않은 참가자의 "본인 기기"에서
+  //    도착 반경에 들어올 때까지 알람 소리 또는 진동을 반복한다.
+  //    - 벌칙 종류는 약속 생성 시 penaltyType 으로 저장 ('alarm' | 'vibrate')
+  //    - 브라우저 정책상 소리/진동은 사용자 조작(터치) 이후에만 시작할 수 있다.
+  // ==========================================
+  const PENALTY_MAX_DURATION_MS = 6 * 60 * 60 * 1000;  // 정각 후 6시간이면 자동 종료
+  const PENALTY_SNOOZE_MS = 5 * 60 * 1000;
+
+  let penaltySnoozeMap = loadStorage('pa_penalty_snooze', {});
+  let penaltyActiveId = null;
+  let penaltyActiveType = null;
+  let penaltyAudioCtx = null;
+  let penaltyBeepTimer = null;
+  let penaltyVibrateTimer = null;
+  let penaltyBannerEl = null;
+  let penaltyAudioUnlocked = false;
+
+  function isPenaltyDueFor(p) {
+    if (!p || !p.id) return false;
+    const type = p.penaltyType;
+    if (type !== 'alarm' && type !== 'vibrate') return false;
+
+    const myName = userProfile ? userProfile.name : '나';
+    if (!amIAttendeeOf(p)) return false;
+    if (arrivedNotified.includes(p.id)) return false;
+
+    const target = Number(p.targetTimestamp);
+    if (!Number.isFinite(target)) return false;
+
+    const now = Date.now();
+    if (now < target) return false;
+
+    // 지속 시간: 0 이면 "도착할 때까지" (최대 6시간 안전장치)
+    const durationMin = Number(p.penaltyDurationMin) || 0;
+    const limitMs = durationMin > 0
+      ? Math.min(durationMin * 60 * 1000, PENALTY_MAX_DURATION_MS)
+      : PENALTY_MAX_DURATION_MS;
+    if (now > target + limitMs) return false;
+
+    if (Number(penaltySnoozeMap[p.id] || 0) > now) return false;
+
+    return true;
+  }
+
+  function evaluatePenaltyState() {
+    // 정각이 가장 먼저 지난 약속 1건만 울린다.
+    const due = promisesList
+      .filter(isPenaltyDueFor)
+      .sort((a, b) => (a.targetTimestamp || 0) - (b.targetTimestamp || 0))[0];
+
+    if (!due) {
+      stopPenalty();
+      return;
+    }
+
+    if (penaltyActiveId === due.id && penaltyActiveType === due.penaltyType) {
+      showPenaltyBanner(due);
+      return;
+    }
+
+    stopPenalty();
+    penaltyActiveId = due.id;
+    penaltyActiveType = due.penaltyType;
+    showPenaltyBanner(due);
+
+    if (due.penaltyType === 'vibrate') startPenaltyVibration();
+    else startPenaltyAlarm();
+  }
+
+  function stopPenalty() {
+    penaltyActiveId = null;
+    penaltyActiveType = null;
+
+    if (penaltyBeepTimer) { clearInterval(penaltyBeepTimer); penaltyBeepTimer = null; }
+    if (penaltyVibrateTimer) { clearInterval(penaltyVibrateTimer); penaltyVibrateTimer = null; }
+    if (navigator.vibrate) { try { navigator.vibrate(0); } catch (e) {} }
+    hidePenaltyBanner();
+  }
+
+  // 오디오는 사용자 제스처 후에만 재생 가능하다. 첫 터치에서 컨텍스트를 깨워둔다.
+  function unlockPenaltyAudio() {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return false;
+      if (!penaltyAudioCtx) penaltyAudioCtx = new Ctx();
+      if (penaltyAudioCtx.state === 'suspended') penaltyAudioCtx.resume();
+      penaltyAudioUnlocked = penaltyAudioCtx.state === 'running';
+      return penaltyAudioUnlocked;
+    } catch (e) {
+      return false;
     }
   }
+
+  function playPenaltyBeep() {
+    if (!penaltyAudioCtx || penaltyAudioCtx.state !== 'running') return;
+    const ctx = penaltyAudioCtx;
+    const now = ctx.currentTime;
+
+    // 삐- 삐- 두 번 (알람 느낌)
+    [0, 0.35].forEach((offset) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(880, now + offset);
+      gain.gain.setValueAtTime(0.0001, now + offset);
+      gain.gain.exponentialRampToValueAtTime(0.25, now + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.28);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + offset);
+      osc.stop(now + offset + 0.3);
+    });
+  }
+
+  function startPenaltyAlarm() {
+    if (!unlockPenaltyAudio()) return;   // 배너의 [소리 켜기] 버튼으로 다시 시도
+    playPenaltyBeep();
+    if (penaltyBeepTimer) clearInterval(penaltyBeepTimer);
+    penaltyBeepTimer = setInterval(playPenaltyBeep, 1500);
+  }
+
+  function startPenaltyVibration() {
+    if (!navigator.vibrate) return;      // iOS Safari 미지원
+    const buzz = () => { try { navigator.vibrate([600, 400]); } catch (e) {} };
+    buzz();
+    if (penaltyVibrateTimer) clearInterval(penaltyVibrateTimer);
+    penaltyVibrateTimer = setInterval(buzz, 1200);
+  }
+
+  function snoozePenalty(promiseId) {
+    penaltySnoozeMap[promiseId] = Date.now() + PENALTY_SNOOZE_MS;
+    saveStorage('pa_penalty_snooze', penaltySnoozeMap);
+    stopPenalty();
+  }
+
+  function hidePenaltyBanner() {
+    if (penaltyBannerEl) {
+      penaltyBannerEl.remove();
+      penaltyBannerEl = null;
+    }
+  }
+
+  function showPenaltyBanner(promiseObj) {
+    const isVibrate = promiseObj.penaltyType === 'vibrate';
+    const lateMin = Math.max(0, Math.floor((Date.now() - promiseObj.targetTimestamp) / 60000));
+
+    let needSoundBtn = false;
+    let notice = '';
+    if (isVibrate && !navigator.vibrate) {
+      notice = '이 기기(브라우저)는 진동을 지원하지 않아 화면 경고만 표시됩니다.';
+    } else if (!isVibrate && (!penaltyAudioCtx || penaltyAudioCtx.state !== 'running')) {
+      needSoundBtn = true;
+      notice = '브라우저 정책상 화면을 한 번 눌러야 알람 소리가 시작됩니다.';
+    }
+
+    if (!penaltyBannerEl) {
+      penaltyBannerEl = document.createElement('div');
+      penaltyBannerEl.id = 'penaltyBanner';
+      penaltyBannerEl.setAttribute('role', 'alert');
+      penaltyBannerEl.setAttribute('aria-live', 'assertive');
+      penaltyBannerEl.style.cssText = 'position:fixed; left:0; right:0; bottom:0; z-index:9999; background:var(--danger-strong); color: var(--text-main); padding:14px 16px calc(14px + env(safe-area-inset-bottom)); box-shadow:0 -6px 20px rgba(0,0,0,0.35);';
+      document.body.appendChild(penaltyBannerEl);
+    }
+
+    penaltyBannerEl.innerHTML = `
+      <div style="font-weight:800; font-size:0.92rem;">${isVibrate ? '📳' : '🔔'} 지각 벌칙 작동 중 - ${escapeHtml(promiseObj.title)}</div>
+      <div style="font-size:0.78rem; margin-top:4px; opacity:0.92;">약속 시간에서 ${lateMin}분 지났습니다. ${(Number(promiseObj.penaltyDurationMin) || 0) > 0 ? `약속 시간 후 ${Number(promiseObj.penaltyDurationMin)}분간 울리며, 그 전에 도착하면 바로 멈춥니다.` : '약속 장소 반경에 도착하면 자동으로 멈춥니다.'}</div>
+      ${notice ? `<div style="font-size:0.74rem; margin-top:4px; opacity:0.85;">${escapeHtml(notice)}</div>` : ''}
+      <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+        ${needSoundBtn ? `<button type="button" id="btnPenaltyEnableSound" style="flex:1; min-width:110px; padding:9px 10px; border:0; border-radius:10px; background:#fff; color:var(--danger-strong); font-weight:800; cursor:pointer;">소리 켜기</button>` : ''}
+        <button type="button" id="btnPenaltySnooze" style="flex:1; min-width:110px; padding:9px 10px; border:1px solid rgba(255,255,255,0.6); border-radius:10px; background:transparent; color: var(--text-main); font-weight:700; cursor:pointer;">5분 미루기</button>
+      </div>
+    `;
+
+    const soundBtn = document.getElementById('btnPenaltyEnableSound');
+    if (soundBtn) {
+      soundBtn.addEventListener('click', () => {
+        if (unlockPenaltyAudio()) startPenaltyAlarm();
+        evaluatePenaltyState();
+      });
+    }
+
+    const snoozeBtn = document.getElementById('btnPenaltySnooze');
+    if (snoozeBtn) {
+      snoozeBtn.addEventListener('click', () => snoozePenalty(promiseObj.id));
+    }
+  }
+
+  // 첫 사용자 조작에서 오디오 잠금 해제 (알람 벌칙 대비)
+  ['pointerdown', 'touchstart', 'keydown'].forEach((evt) => {
+    document.addEventListener(evt, () => {
+      if (!penaltyAudioUnlocked) {
+        unlockPenaltyAudio();
+        if (penaltyActiveId && penaltyActiveType === 'alarm' && !penaltyBeepTimer) startPenaltyAlarm();
+      }
+    }, { once: false, passive: true });
+  });
+
+  setInterval(evaluatePenaltyState, 5000);
 
   // Initialize App
   initInstantGpsTracking();
   // initFirebaseRealtimeDB() is now called earlier (before getRedirectResult)
   checkOnboarding();
   renderAll();
+  evaluatePenaltyState();
 });

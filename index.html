@@ -1,13 +1,24 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="ko" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>세이피 (Safey) - 약속 &amp; 실시간 위치 공유</title>
 
   <!-- PWA Manifest & Mobile App Support -->
   <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#5865f2">
+  <meta name="theme-color" content="#000000">
+  <script>
+    // 첫 페인트 전에 테마를 적용해 깜빡임을 막는다. (기본: 다크)
+    (function () {
+      try {
+        var t = localStorage.getItem('pa_theme') === 'light' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+        var m = document.querySelector('meta[name="theme-color"]');
+        if (m) m.setAttribute('content', t === 'light' ? '#ffffff' : '#000000');
+      } catch (e) {}
+    })();
+  </script>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="세이피">
@@ -24,7 +35,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <link rel="stylesheet" href="css/style.css?v=42">
+  <link rel="stylesheet" href="css/style.css?v=59">
 
   <!-- Official Google Identity Services & Apple ID Auth SDKs -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -64,6 +75,10 @@
         <i data-lucide="users"></i>
         <span>친구 관리</span>
       </button>
+      <button class="tab-btn" data-tab="tabHistory">
+        <i data-lucide="calendar-days"></i>
+        <span>약속 기록</span>
+      </button>
     </nav>
 
     <!-- Main Content Pages -->
@@ -71,30 +86,6 @@
 
       <!-- TAB 1: PROMISES -->
       <section id="tabPromises" class="tab-page active">
-        <!-- 내 실시간 위치 바 -->
-        <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius-lg); padding:12px 14px; margin-bottom:14px;">
-          <div style="display:flex; align-items:center; gap:10px;">
-            <div style="flex:1; min-width:0;">
-              <div id="liveGpsAddrText" style="font-size:0.86rem; font-weight:700; color:#fff; word-break:break-all;">📍 위치 확인 중...</div>
-              <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:4px;">
-                <span id="liveGpsCoordsText" style="font-size:0.72rem; color:var(--text-muted); font-variant-numeric:tabular-nums;">좌표 없음</span>
-                <span id="liveGpsMetaText" style="font-size:0.72rem; color:var(--text-muted);"></span>
-              </div>
-            </div>
-            <button class="btn-secondary" id="btnFetchGPSHome" style="flex-shrink:0; padding:8px 10px; font-size:0.78rem;" aria-label="내 위치 다시 확인">
-              <i data-lucide="locate-fixed"></i> 위치 갱신
-            </button>
-          </div>
-        </div>
-
-        <!-- Promise Invitation Box -->
-        <div id="invitationSection" style="display:none; margin-bottom:20px;">
-          <div class="page-top" style="margin-bottom:8px;">
-            <h2 style="font-size:1rem; color:#fdcb6e;">초대받은 약속</h2>
-          </div>
-          <div id="invitationsList" class="cards-list"></div>
-        </div>
-
         <div class="page-top">
           <h2>약속 목록</h2>
           <button class="btn-primary" id="btnOpenCreatePromise">
@@ -127,7 +118,7 @@
 
         <!-- 친구 추가 입력 박스 -->
         <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 16px;">
-          <label style="font-size: 0.82rem; color: #fff; font-weight: 700; display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+          <label style="font-size: 0.82rem; color: var(--text-main); font-weight: 700; display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
             <i data-lucide="user-plus" style="width:16px; height:16px; color:var(--primary);"></i> 친구 코드로 추가
           </label>
           <div class="friend-code-add-row">
@@ -138,18 +129,8 @@
           </div>
         </div>
 
-        <!-- 받은 친구 요청 섹션 (요청이 있을 때만 표시) -->
-        <div id="friendRequestsSection" style="display:none; background: var(--bg-card); border: 1px solid #fdcb6e; border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 16px;">
-          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
-            <h3 style="font-size: 0.95rem; color: #fdcb6e; font-weight: 700; display:flex; align-items:center; gap:6px;">
-              <i data-lucide="user-check" style="width:18px;height:18px;color:#fdcb6e;"></i> 받은 친구 요청
-            </h3>
-          </div>
-          <div id="friendRequestsList" class="cards-list" style="gap:8px;"></div>
-        </div>
-
         <div class="page-top" style="margin-bottom: 10px;">
-          <h3 style="font-size: 0.95rem; color: #fff; font-weight: 700;">등록된 친구 목록</h3>
+          <h3 style="font-size: 0.95rem; color: var(--text-main); font-weight: 700;">등록된 친구 목록</h3>
         </div>
 
         <div id="friendsList" class="cards-list">
@@ -157,7 +138,74 @@
         </div>
       </section>
 
+      <!-- TAB 3: PROMISE HISTORY CALENDAR -->
+      <section id="tabHistory" class="tab-page">
+        <div class="calendar-head">
+          <button type="button" class="cal-nav" id="btnCalPrev" aria-label="이전 달">
+            <i data-lucide="chevron-left"></i>
+          </button>
+          <button type="button" id="calMonthLabel" class="cal-month-label" aria-label="년월 직접 입력">2026년 7월</button>
+          <button type="button" class="cal-nav" id="btnCalNext" aria-label="다음 달">
+            <i data-lucide="chevron-right"></i>
+          </button>
+        </div>
+
+        <div class="calendar-stage">
+          <div class="calendar-sheet" id="calendarSheet">
+            <div class="cal-weekdays">
+              <span>일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span>토</span>
+            </div>
+            <div class="cal-grid" id="calendarGrid"></div>
+          </div>
+        </div>
+
+        <p id="calMonthSummary" class="cal-summary">이번 달 약속 0건</p>
+        <div id="calLegend" class="cal-legend"></div>
+      </section>
+
     </main>
+
+    <!-- 받은 알림 플로팅 버튼 (초대받은 약속 / 받은 친구 요청) -->
+    <div class="fab-stack">
+      <button type="button" class="fab-circle" id="fabInvites" aria-label="초대받은 약속 열기">
+        <i data-lucide="calendar-clock"></i>
+        <span class="fab-badge" id="fabInvitesBadge" hidden>0</span>
+      </button>
+      <button type="button" class="fab-circle" id="fabFriendReqs" aria-label="받은 친구 요청 열기">
+        <i data-lucide="user-plus"></i>
+        <span class="fab-badge" id="fabFriendReqsBadge" hidden>0</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- 하단에서 올라오는 시트: 초대받은 약속 -->
+  <div class="sheet-backdrop" id="inviteSheet">
+    <div class="sheet-panel">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <h3>초대받은 약속</h3>
+        <button class="btn-close" id="btnCloseInviteSheet" aria-label="닫기"><i data-lucide="x"></i></button>
+      </div>
+      <div class="sheet-body">
+        <div id="invitationsList" class="cards-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 하단에서 올라오는 시트: 받은 친구 요청 -->
+  <div class="sheet-backdrop" id="friendReqSheet">
+    <div class="sheet-panel">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <h3>받은 친구 요청</h3>
+        <button class="btn-close" id="btnCloseFriendReqSheet" aria-label="닫기"><i data-lucide="x"></i></button>
+      </div>
+      <div class="sheet-body">
+        <div id="friendRequestsSection">
+          <div id="friendRequestsList" class="cards-list" style="gap:8px;"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
 
@@ -205,7 +253,7 @@
         <div class="input-group">
           <label>현재 감지된 내 위치</label>
           <input type="text" id="inputOnboardLocation" value="위치 확인 중..." readonly>
-          <span style="font-size:0.72rem; color:#a0a7b5; margin-top:2px;">위치 권한을 허용하면 정확한 주소로 자동 갱신됩니다.</span>
+          <span style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">위치 권한을 허용하면 정확한 주소로 자동 갱신됩니다.</span>
         </div>
 
         <div class="input-group">
@@ -223,16 +271,16 @@
         <div class="terms-agree-box" style="margin-top:4px;">
           <span class="terms-agree-title">약관 동의 (필수)</span>
 
-          <label style="display:flex; align-items:flex-start; gap:8px; font-size:0.8rem; color:#fff; cursor:pointer; margin-top:4px;">
+          <label style="display:flex; align-items:flex-start; gap:8px; font-size:0.8rem; color: var(--text-main); cursor:pointer; margin-top:4px;">
             <input type="checkbox" id="checkGpsTerms" required style="margin-top:2px;">
             <span><strong>위치 및 GPS 수집 동의 (필수)</strong><br>
-            <span style="font-size:0.72rem; color:#a0a7b5;">실시간 위치 확인 및 거리 계산</span></span>
+            <span style="font-size:0.72rem; color: var(--text-muted);">실시간 위치 확인 및 거리 계산</span></span>
           </label>
 
-          <label style="display:flex; align-items:flex-start; gap:8px; font-size:0.8rem; color:#fff; cursor:pointer; margin-top:4px;">
+          <label style="display:flex; align-items:flex-start; gap:8px; font-size:0.8rem; color: var(--text-main); cursor:pointer; margin-top:4px;">
             <input type="checkbox" id="checkPrivacyTerms" required style="margin-top:2px;">
             <span><strong>개인정보 및 프로필 공유 동의 (필수)</strong><br>
-            <span style="font-size:0.72rem; color:#a0a7b5;">프로필 공유 및 친구 찾기</span></span>
+            <span style="font-size:0.72rem; color: var(--text-muted);">프로필 공유 및 친구 찾기</span></span>
           </label>
         </div>
 
@@ -275,23 +323,13 @@
           <i data-lucide="save" style="width:16px;height:16px;"></i> 저장
         </button>
 
-        <div class="input-group">
-          <label>내 친구 코드</label>
-          <div class="code-copy-box">
-            <span id="settingsCodeText" class="code-text">USR-0000-0000</span>
-            <button class="btn-copy-code" id="btnCopySettingsCode">
-              <i data-lucide="copy"></i> 복사
-            </button>
-          </div>
-        </div>
-
-        <div class="input-group">
-          <label>친구 추가</label>
-          <div class="friend-code-add-row">
-            <input type="text" id="inputAddFriendCode" placeholder="친구 코드 입력">
-            <button class="btn-primary" id="btnAddFriendByCode">등록</button>
-          </div>
-        </div>
+        <!-- 테마 설정 -->
+        <button type="button" class="btn-secondary full-width" id="btnOpenThemeSettings" style="margin-top:12px; justify-content:space-between;">
+          <span style="display:flex; align-items:center; gap:6px;">
+            <i data-lucide="palette" style="width:16px;height:16px;"></i> 테마 설정
+          </span>
+          <span id="themeCurrentLabel" style="font-size:0.78rem; font-weight:800; color:var(--primary);">다크 모드</span>
+        </button>
 
         <!-- 앱 설치 안내 -->
         <button type="button" class="btn-secondary full-width" id="btnOpenAppDownload" style="margin-top:12px;">
@@ -299,7 +337,7 @@
         </button>
 
         <!-- 로그아웃 버튼 -->
-        <button type="button" class="btn-secondary full-width" id="btnLogout" style="margin-top:8px; background:rgba(239,68,68,0.15); color:#ef4444; border-color:rgba(239,68,68,0.3);">
+        <button type="button" class="btn-secondary full-width" id="btnLogout" style="margin-top:8px; background:var(--red-soft); color:var(--red); border-color:var(--red-soft);">
           <i data-lucide="log-out" style="width:16px;height:16px;"></i> 로그아웃
         </button>
       </div>
@@ -320,12 +358,12 @@
 
         <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
           <div class="input-group">
-            <label style="font-size:0.75rem; color:#a0a7b5;">선택한 주소</label>
-            <input type="text" id="pickedAddressResult" placeholder="선택한 장소 주소" style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); color:#fff; padding:10px; border-radius:8px; font-size:0.85rem;" readonly>
+            <label style="font-size:0.75rem; color: var(--text-muted);">선택한 주소</label>
+            <input type="text" id="pickedAddressResult" placeholder="선택한 장소 주소" style="background:rgba(255,255,255,0.06); border:1px solid var(--border-color); color: var(--text-main); padding:10px; border-radius:8px; font-size:0.85rem;" readonly>
           </div>
           <div class="input-group">
             <label style="font-size:0.75rem; color:#a29bfe;">장소 이름 (선택)</label>
-            <input type="text" id="pickedVenueName" placeholder="예: 강남역 11번출구 카페" style="background:rgba(255,255,255,0.08); border:1px solid var(--primary); color:#fff; padding:10px; border-radius:8px; font-size:0.85rem;">
+            <input type="text" id="pickedVenueName" placeholder="예: 강남역 11번출구 카페" style="background:var(--border-color); border:1px solid var(--primary); color: var(--text-main); padding:10px; border-radius:8px; font-size:0.85rem;">
           </div>
           <button type="button" class="btn-primary" id="btnConfirmPickLocation" style="margin-top:4px;">이 장소로 선택</button>
         </div>
@@ -336,46 +374,23 @@
 
   <!-- 3. LIVE MAP TRACKER MODAL -->
   <div class="modal-backdrop" id="liveMapModal">
-    <div class="modal-box" style="max-width:540px; width:95vw; background:#10131c;">
+    <div class="modal-box" style="max-width:540px; width:95vw;">
       <div class="modal-head">
         <h3>실시간 위치 지도</h3>
         <button class="btn-close" id="btnCloseLiveMap"><i data-lucide="x"></i></button>
       </div>
-      <div class="modal-body" style="padding:12px; gap:8px;">
-        <div id="mapViewHeader" style="font-size:0.85rem; color:#fff; font-weight:700; display:flex; justify-content:space-between; align-items:center;">
-          <span>약속 장소: <strong id="mapTargetLocText" style="color:#a29bfe;">약속 위치</strong></span>
+      <div class="modal-body" style="padding:12px; gap:10px;">
+        <div id="mapViewHeader" class="map-venue-row">
+          <i data-lucide="flag" class="map-venue-icon"></i>
+          <span id="mapTargetLocText" class="map-venue-name">약속 위치</span>
+          <span id="mapArrivalCount" class="map-arrival-count">0/0 도착</span>
         </div>
 
-        <div id="mapViewContainer" class="naver-style-map" style="width:100%; height:380px; border-radius:16px; z-index:1; border:1px solid rgba(255,255,255,0.1);"></div>
+        <div id="mapViewContainer" class="naver-style-map" style="width:100%; height:360px; border-radius:var(--radius-md); z-index:1;"></div>
 
-        <div id="mapFriendsCarousel" class="map-friends-carousel"></div>
+        <div id="mapParticipantList" class="map-participant-list"></div>
 
-        <!-- Arrival Status Split Section -->
-        <div id="arrivalGroupSection" style="margin-top:4px; display:flex; flex-direction:column; gap:8px;"></div>
-
-        <div id="mapFriendDetailCard" class="friend-gps-detail-card" style="margin-top:4px;">
-          <div class="detail-header-row">
-            <div class="detail-user-info">
-              <img id="detailFriendAvatar" src="images/default_profile.jpg" class="detail-avatar">
-              <div>
-                <div class="detail-name-row">
-                  <span id="detailFriendName" class="detail-name">닉네임</span>
-                </div>
-                <div id="detailFriendAddress" class="detail-address">주소 확인 중...</div>
-              </div>
-            </div>
-          </div>
-
-          <div class="dynamic-stats-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:nowrap; gap:6px; font-size:0.75rem; color:#a0a7b5; padding:8px 10px; background:rgba(255,255,255,0.04); border-radius:8px; white-space:nowrap;">
-            <span>GPS: <strong id="statGpsStatus" style="color:#00b894;">위치 확인 중</strong></span>
-            <span style="color:rgba(255,255,255,0.2);">|</span>
-            <span>수신: <strong id="statUpdated" style="color:#fff;">-</strong></span>
-            <span style="color:rgba(255,255,255,0.2);">|</span>
-            <span>목적지 거리: <strong id="statDistance" style="color:#a29bfe;">-</strong></span>
-          </div>
-
-        </div>
-
+        <div id="mapSelectedInfo" class="map-selected-info">참가자를 선택하면 상세 정보가 표시됩니다.</div>
       </div>
     </div>
   </div>
@@ -389,8 +404,8 @@
         <button class="btn-close" id="btnCloseLeaveConsent"><i data-lucide="x"></i></button>
       </div>
       <div class="modal-body text-center">
-        <p style="font-size:0.95rem; color:#fff; font-weight:700;" id="leaveModalTitle">약속에서 나가시겠습니까?</p>
-        <p style="font-size:0.8rem; color:#a0a7b5; margin-top:6px;">참가자의 동의 확인이 필요합니다.</p>
+        <p style="font-size:0.95rem; color: var(--text-main); font-weight:700;" id="leaveModalTitle">약속에서 나가시겠습니까?</p>
+        <p style="font-size:0.8rem; color: var(--text-muted); margin-top:6px;">참가자의 동의 확인이 필요합니다.</p>
 
         <div class="sim-panel" style="margin-top:12px;">
           <span class="sim-label">동의 상태:</span>
@@ -399,7 +414,7 @@
       </div>
       <div class="modal-foot">
         <button type="button" class="btn-secondary" id="btnCancelLeave">취소</button>
-        <button type="button" class="btn-primary" id="btnConfirmLeave" style="background:#ff7675;">나가기</button>
+        <button type="button" class="btn-primary" id="btnConfirmLeave" style="background:var(--red);">나가기</button>
       </div>
     </div>
   </div>
@@ -419,13 +434,14 @@
         </div>
 
         <div class="input-group">
-          <label>약속 장소</label>
+          <label>약속 장소 (지도에서 직접 선택)</label>
           <div class="gps-location-row">
-            <input type="text" id="inputPromiseLocation" placeholder="예: 강남역, 홍대입구역" required>
+            <input type="text" id="inputPromiseLocation" placeholder="지도 선택으로 장소를 찍어주세요" required readonly>
             <button type="button" class="btn-gps-fetch" id="btnOpenMapPicker">
               <i data-lucide="map"></i> 지도 선택
             </button>
           </div>
+          <span style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">지도에서 좌표를 찍지 않으면 약속을 만들 수 없습니다.</span>
         </div>
 
         <div class="input-group">
@@ -435,13 +451,28 @@
 
         <div class="input-group">
           <label>도착 인정 반경 (m)</label>
-          <input type="number" id="inputAutoArrivalDist" placeholder="300" value="300" step="50" min="50" required>
-          <span style="font-size:0.72rem; color:#a0a7b5; margin-top:2px;">반경 이내 진입 시 자동 도착 처리됩니다. (추천: 300m)</span>
+          <input type="number" id="inputAutoArrivalDist" placeholder="200" value="200" step="50" min="50" required>
+          <span style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">반경 이내 진입 시 자동 도착 처리됩니다. (추천: 200m)</span>
         </div>
 
         <div class="input-group">
           <label>약속 시간</label>
           <input type="datetime-local" id="inputPromiseTime" required>
+        </div>
+
+        <div class="input-group">
+          <label>실시간 위치 공개 시점</label>
+          <select id="selectLocationReveal" class="status-select" style="padding:10px; font-size:0.85rem;">
+            <option value="0" selected>항상 공개 (모두 가능)</option>
+            <option value="30">약속 30분 전부터</option>
+            <option value="60">약속 1시간 전부터</option>
+            <option value="180">약속 3시간 전부터</option>
+            <option value="360">약속 6시간 전부터</option>
+            <option value="720">약속 12시간 전부터</option>
+            <option value="1440">약속 1일 전부터</option>
+            <option value="4320">약속 3일 전부터</option>
+          </select>
+          <span style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">공개 시점 전에는 약속 장소만 보이고 참가자 위치·거리·GPS 상태는 숨겨집니다.</span>
         </div>
 
         <div class="input-group">
@@ -453,8 +484,34 @@
         </div>
 
         <div class="input-group">
+          <label>지각 벌칙 (약속 정각까지 안 온 사람)</label>
+          <select id="selectPenaltyType" class="status-select" style="padding:10px; font-size:0.85rem;">
+            <option value="alarm" selected>🔔 알람 벌칙 - 알람 소리</option>
+            <option value="vibrate">📳 진동 벌칙 - 진동</option>
+          </select>
+
+          <label style="margin-top:8px;">벌칙 지속 시간</label>
+          <select id="selectPenaltyDuration" class="status-select" style="padding:10px; font-size:0.85rem;">
+            <option value="0" selected>도착할 때까지</option>
+            <option value="1">1분</option>
+            <option value="3">3분</option>
+            <option value="5">5분</option>
+            <option value="10">10분</option>
+            <option value="30">30분</option>
+            <option value="60">60분</option>
+          </select>
+          <span id="penaltyHintText" style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">약속 시간이 지나면 아직 도착하지 않은 참가자 기기에서 알람이 울립니다. 도착하면 즉시 멈춥니다.</span>
+        </div>
+
+        <div class="input-group">
           <label>참가 친구 선택</label>
-          <div id="friendSelectorList" class="friend-selector-grid"></div>
+          <button type="button" class="btn-secondary full-width" id="btnOpenFriendPicker" style="justify-content:space-between;">
+            <span style="display:flex; align-items:center; gap:6px;">
+              <i data-lucide="users" style="width:16px;height:16px;"></i> 친구 선택
+            </span>
+            <span id="friendPickerCountBadge" style="font-size:0.78rem; color:var(--primary); font-weight:800;">0명</span>
+          </button>
+          <div id="selectedFriendsPreview" class="friend-selector-grid" style="margin-top:8px;"></div>
         </div>
 
         <div class="modal-foot">
@@ -462,6 +519,100 @@
           <button type="submit" class="btn-primary">등록 및 초대</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- 5-1. FRIEND PICKER MODAL (참가 친구 선택) -->
+  <div class="modal-backdrop" id="friendPickerModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>참가 친구 선택</h3>
+        <button class="btn-close" id="btnCloseFriendPicker"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="input-group">
+          <input type="search" id="inputFriendPickerSearch" placeholder="친구 이름 검색" autocomplete="off">
+        </div>
+
+        <div style="display:flex; gap:8px; margin-bottom:10px;">
+          <button type="button" class="btn-secondary" id="btnFriendPickerSelectAll" style="flex:1; font-size:0.78rem; padding:8px;">전체 선택</button>
+          <button type="button" class="btn-secondary" id="btnFriendPickerClearAll" style="flex:1; font-size:0.78rem; padding:8px;">전체 해제</button>
+        </div>
+
+        <div id="friendPickerList" class="friend-picker-list" role="group" aria-label="참가 친구 목록"></div>
+
+        <div class="modal-foot">
+          <span id="friendPickerSelectedCount" style="font-size:0.8rem; color:var(--text-muted); align-self:center; margin-right:auto;">0명 선택됨</span>
+          <button type="button" class="btn-primary" id="btnConfirmFriendPicker">선택 완료</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5-2. THEME SETTINGS MODAL -->
+  <div class="modal-backdrop" id="themeModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>테마 설정</h3>
+        <button class="btn-close" id="btnCloseTheme"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="theme-option-list">
+          <button type="button" class="theme-option" data-theme-value="dark">
+            <span class="theme-swatch theme-swatch-dark" aria-hidden="true"></span>
+            <span class="theme-option-text">
+              <span class="theme-option-name">다크 모드</span>
+              <span class="theme-option-sub">검정 · 회색 기본 테마</span>
+            </span>
+            <span class="theme-option-check" aria-hidden="true">✓</span>
+          </button>
+
+          <button type="button" class="theme-option" data-theme-value="light">
+            <span class="theme-swatch theme-swatch-light" aria-hidden="true"></span>
+            <span class="theme-option-text">
+              <span class="theme-option-name">라이트 모드</span>
+              <span class="theme-option-sub">흰색 · 회색 밝은 테마</span>
+            </span>
+            <span class="theme-option-check" aria-hidden="true">✓</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 하단에서 올라오는 시트: 그날의 약속 상세 -->
+  <div class="sheet-backdrop" id="daySheet">
+    <div class="sheet-panel">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <h3 id="daySheetTitle">약속 상세</h3>
+        <button class="btn-close" id="btnCloseDaySheet" aria-label="닫기"><i data-lucide="x"></i></button>
+      </div>
+      <div class="sheet-body">
+        <div id="daySheetList" class="cards-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 년/월 직접 입력 모달 -->
+  <div class="modal-backdrop" id="calMonthModal">
+    <div class="modal-box" style="max-width:320px;">
+      <div class="modal-head">
+        <h3>년 · 월 이동</h3>
+        <button class="btn-close" id="btnCloseCalMonth" aria-label="닫기"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="cal-month-edit">
+          <input type="number" id="inputCalYear" min="1970" max="2999" step="1" inputmode="numeric" aria-label="년">
+          <span>년</span>
+          <input type="number" id="inputCalMonth" class="month" min="1" max="12" step="1" inputmode="numeric" aria-label="월">
+          <span>월</span>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn-secondary" id="btnCalMonthToday">이번 달</button>
+        <button type="button" class="btn-primary" id="btnCalMonthApply">이동</button>
+      </div>
     </div>
   </div>
 
@@ -476,10 +627,10 @@
         <!-- Hero Section -->
         <div class="pwa-guide-hero">
           <div class="pwa-hero-icon">
-            <i data-lucide="smartphone" style="width:26px;height:26px;color:#fff;"></i>
+            <i data-lucide="smartphone" style="width:26px;height:26px;color: var(--text-main);"></i>
           </div>
-          <div style="font-size:1rem; font-weight:800; color:#fff;">약속 &amp; 위치 공유</div>
-          <div style="font-size:0.78rem; color:#a0a7b5;">홈 화면에 설치하면 앱으로 사용 가능</div>
+          <div style="font-size:1rem; font-weight:800; color: var(--text-main);">약속 &amp; 위치 공유</div>
+          <div style="font-size:0.78rem; color: var(--text-muted);">홈 화면에 설치하면 앱으로 사용 가능</div>
         </div>
 
         <!-- Direct Install Button -->
@@ -555,7 +706,7 @@
   </div>
 
   <script src="js/gps.js?v=42"></script>
-  <script src="js/app.js?v=42"></script>
+  <script src="js/app.js?v=59"></script>
 
   <script>
     // PWA Service Worker Registration & Installation Prompt Handler
