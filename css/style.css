@@ -16,8 +16,8 @@
    ========================================================================== */
 html,
 html[data-theme='dark'] {
-  --bg-main: #1b222d;
-  --shell-bg: #1b222d;
+  --bg-main: #000000;
+  --shell-bg: #000000;
   --bg-card: #1c1c1e;
   --bg-card-hover: #26262a;
   --bg-subtle: rgba(255, 255, 255, 0.08);
