@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>세이피 (Safey) - 약속 &amp; 실시간 위치 공유</title>
+
+  <!-- PWA Manifest & Mobile App Support -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#5865f2">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="세이피">
+  <link rel="apple-touch-icon" href="images/icon-192.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="images/icon-192.png">
+
+  <!-- Google Fonts & Lucide Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Leaflet Interactive Map Library -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <link rel="stylesheet" href="css/style.css?v=42">
+
+  <!-- Official Google Identity Services & Apple ID Auth SDKs -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script type="text/javascript" src="https://appleid.cdn-apple.com/appleauth/static/js/api/v1/appleid/auth.js"></script>
+
+  <!-- Firebase Realtime Database & Auth SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+</head>
+<body>
+
+  <div class="app-shell">
+
+    <!-- App Header -->
+    <header class="app-header">
+      <div class="brand">
+        <i data-lucide="shield-check" class="brand-icon" style="color:var(--primary);"></i>
+        <h1>세이피</h1>
+      </div>
+      <div class="header-right">
+        <div class="user-chip" id="btnOpenSettings">
+          <img src="images/default_profile.jpg" id="headerUserAvatar" class="header-avatar" alt="Avatar">
+          <span class="user-name" id="headerUserName">내 프로필</span>
+          <i data-lucide="settings" class="icon-gear"></i>
+        </div>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="app-tabs">
+      <button class="tab-btn active" data-tab="tabPromises">
+        <i data-lucide="calendar"></i>
+        <span>약속 목록</span>
+      </button>
+      <button class="tab-btn" data-tab="tabFriends">
+        <i data-lucide="users"></i>
+        <span>친구 관리</span>
+      </button>
+    </nav>
+
+    <!-- Main Content Pages -->
+    <main class="app-main">
+
+      <!-- TAB 1: PROMISES -->
+      <section id="tabPromises" class="tab-page active">
+        <!-- 내 실시간 위치 바 -->
+        <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius-lg); padding:12px 14px; margin-bottom:14px;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div style="flex:1; min-width:0;">
+              <div id="liveGpsAddrText" style="font-size:0.86rem; font-weight:700; color:#fff; word-break:break-all;">📍 위치 확인 중...</div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:4px;">
+                <span id="liveGpsCoordsText" style="font-size:0.72rem; color:var(--text-muted); font-variant-numeric:tabular-nums;">좌표 없음</span>
+                <span id="liveGpsMetaText" style="font-size:0.72rem; color:var(--text-muted);"></span>
+              </div>
+            </div>
+            <button class="btn-secondary" id="btnFetchGPSHome" style="flex-shrink:0; padding:8px 10px; font-size:0.78rem;" aria-label="내 위치 다시 확인">
+              <i data-lucide="locate-fixed"></i> 위치 갱신
+            </button>
+          </div>
+        </div>
+
+        <!-- Promise Invitation Box -->
+        <div id="invitationSection" style="display:none; margin-bottom:20px;">
+          <div class="page-top" style="margin-bottom:8px;">
+            <h2 style="font-size:1rem; color:#fdcb6e;">초대받은 약속</h2>
+          </div>
+          <div id="invitationsList" class="cards-list"></div>
+        </div>
+
+        <div class="page-top">
+          <h2>약속 목록</h2>
+          <button class="btn-primary" id="btnOpenCreatePromise">
+            <i data-lucide="plus"></i>
+            약속 만들기
+          </button>
+        </div>
+
+        <div id="promisesList" class="cards-list">
+          <!-- Dynamically populated via JS -->
+        </div>
+      </section>
+
+      <!-- TAB 2: FRIENDS -->
+      <section id="tabFriends" class="tab-page">
+        <div class="page-top">
+          <h2>친구 관리</h2>
+        </div>
+
+        <!-- 내 친구 코드 복사 카드 -->
+        <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 12px;">
+          <span style="font-size: 0.78rem; color: var(--text-muted); font-weight: 600; display:block; margin-bottom:6px;">내 친구 코드</span>
+          <div class="code-copy-box">
+            <span id="tabMyCodeText" class="code-text">USR-0000-0000</span>
+            <button class="btn-copy-code" id="btnCopyTabCode">
+              <i data-lucide="copy" style="width:14px;height:14px;"></i> 복사
+            </button>
+          </div>
+        </div>
+
+        <!-- 친구 추가 입력 박스 -->
+        <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 16px;">
+          <label style="font-size: 0.82rem; color: #fff; font-weight: 700; display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+            <i data-lucide="user-plus" style="width:16px; height:16px; color:var(--primary);"></i> 친구 코드로 추가
+          </label>
+          <div class="friend-code-add-row">
+            <input type="text" id="inputTabAddFriendCode" placeholder="친구 코드 입력 (USR-XXXX-XXXX)">
+            <button class="btn-primary" id="btnTabAddFriendByCode">
+              <i data-lucide="plus"></i> 등록
+            </button>
+          </div>
+        </div>
+
+        <!-- 받은 친구 요청 섹션 (요청이 있을 때만 표시) -->
+        <div id="friendRequestsSection" style="display:none; background: var(--bg-card); border: 1px solid #fdcb6e; border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 16px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+            <h3 style="font-size: 0.95rem; color: #fdcb6e; font-weight: 700; display:flex; align-items:center; gap:6px;">
+              <i data-lucide="user-check" style="width:18px;height:18px;color:#fdcb6e;"></i> 받은 친구 요청
+            </h3>
+          </div>
+          <div id="friendRequestsList" class="cards-list" style="gap:8px;"></div>
+        </div>
+
+        <div class="page-top" style="margin-bottom: 10px;">
+          <h3 style="font-size: 0.95rem; color: #fff; font-weight: 700;">등록된 친구 목록</h3>
+        </div>
+
+        <div id="friendsList" class="cards-list">
+          <!-- Dynamically populated via JS -->
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+
+  <!-- ==================== MODALS ==================== -->
+
+  <!-- 0. ONBOARDING & ACCOUNT CREATION MODAL -->
+  <div class="modal-backdrop" id="onboardingModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3 id="onboardModalTitle">회원가입</h3>
+      </div>
+
+      <!-- STEP 1: Mandatory Social Sign-In -->
+      <div id="onboardStep1" class="modal-form">
+        <div class="social-login-container" style="margin-top:10px;">
+          <span class="social-login-title">소셜 계정으로 계속하기 (필수)</span>
+          <div class="social-login-buttons" style="margin-top:14px;">
+            <button type="button" class="btn-social-auth btn-google-login" id="btnGoogleAuth" style="cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:rgba(0,0,0,0); position:relative; z-index:10;">
+              <svg style="width:18px;height:18px;flex-shrink:0;pointer-events:none;" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
+                <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.11 0-5.74-2.1-6.68-4.93H1.28v3.15C3.26 21.3 7.31 24 12 24z"/>
+                <path fill="#FBBC05" d="M5.32 14.27c-.24-.72-.38-1.49-.38-2.27s.14-1.55.38-2.27V6.58H1.28C.46 8.2.0 10.05.0 12c0 1.95.46 3.8 1.28 5.42l4.04-3.15z"/>
+                <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24.0 12 .0 7.31.0 3.26 2.7 1.28 6.58l4.04 3.15c.94-2.83 3.57-4.98 6.68-4.98z"/>
+              </svg>
+              <span style="pointer-events:none;">Google 계정으로 로그인</span>
+            </button>
+
+            <button type="button" class="btn-social-auth btn-apple-login" id="btnAppleAuth" style="cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:rgba(0,0,0,0); position:relative; z-index:10;">
+              <svg style="width:18px;height:18px;flex-shrink:0;fill:#ffffff;pointer-events:none;" viewBox="0 0 170 170">
+                <path d="M150.37 130.25c-2.45 5.66-5.35 10.87-8.71 15.66-4.58 6.53-8.33 11.05-11.22 13.56-4.48 4.12-9.28 6.23-14.42 6.35-3.69 0-8.14-1.05-13.32-3.18-5.19-2.12-9.97-3.17-14.34-3.17-4.58 0-9.49 1.05-14.75 3.17-5.26 2.13-9.5 3.24-12.74 3.35-4.34.13-9.16-1.9-14.49-6.07-3.23-2.62-7.14-7.27-11.73-13.96-6.19-9.05-11.2-19.38-15.02-31-3.82-11.62-5.73-22.94-5.73-33.97 0-15.09 3.79-27.46 11.37-37.1 7.58-9.64 17.15-14.54 28.71-14.7 4.97 0 10.27 1.2 15.91 3.6 5.63 2.4 9.4 3.6 11.3 3.6 1.56 0 5.43-1.25 11.61-3.75 6.18-2.5 11.41-3.64 15.69-3.44 11.7.63 21.05 4.88 28.06 12.74-10.4 6.27-15.48 14.89-15.24 25.86.25 8.7 3.52 16.03 9.8 21.99 6.28 5.96 13.78 9.38 22.5 10.25-2.6 7.68-6.14 15.54-10.63 23.57zM119.22 31.08c0-7.2 2.61-14.07 7.83-20.61 5.22-6.54 11.79-10.24 19.71-11.1.25.94.38 1.8.38 2.58 0 7.2-2.68 14.22-8.04 21.06-5.36 6.84-11.96 10.59-19.8 11.25-.08-1.02-.08-2.09-.08-3.18z"/>
+              </svg>
+              <span style="pointer-events:none;">Apple 계정으로 로그인</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 2: Profile Setup & Terms Agreement (Appears After Social Login) -->
+      <form id="formOnboarding" class="modal-form" style="display:none;">
+        <div class="input-group">
+          <label>닉네임 설정</label>
+          <input type="text" id="inputOnboardName" placeholder="닉네임 입력" required>
+        </div>
+
+        <div class="input-group">
+          <label>현재 감지된 내 위치</label>
+          <input type="text" id="inputOnboardLocation" value="위치 확인 중..." readonly>
+          <span style="font-size:0.72rem; color:#a0a7b5; margin-top:2px;">위치 권한을 허용하면 정확한 주소로 자동 갱신됩니다.</span>
+        </div>
+
+        <div class="input-group">
+          <label>프로필 사진 설정</label>
+          <div class="photo-upload-row">
+            <img src="images/default_profile.jpg" id="onboardPhotoPreview" class="photo-preview-circle" alt="Preview">
+            <label for="inputOnboardPhoto" class="btn-secondary btn-file-pick">
+              <i data-lucide="image"></i> 사진 선택
+            </label>
+            <input type="file" id="inputOnboardPhoto" accept="image/*" style="display:none;">
+          </div>
+        </div>
+
+        <!-- Terms of Service Checkbox Box -->
+        <div class="terms-agree-box" style="margin-top:4px;">
+          <span class="terms-agree-title">약관 동의 (필수)</span>
+
+          <label style="display:flex; align-items:flex-start; gap:8px; font-size:0.8rem; color:#fff; cursor:pointer; margin-top:4px;">
+            <input type="checkbox" id="checkGpsTerms" required style="margin-top:2px;">
+            <span><strong>위치 및 GPS 수집 동의 (필수)</strong><br>
+            <span style="font-size:0.72rem; color:#a0a7b5;">실시간 위치 확인 및 거리 계산</span></span>
+          </label>
+
+          <label style="display:flex; align-items:flex-start; gap:8px; font-size:0.8rem; color:#fff; cursor:pointer; margin-top:4px;">
+            <input type="checkbox" id="checkPrivacyTerms" required style="margin-top:2px;">
+            <span><strong>개인정보 및 프로필 공유 동의 (필수)</strong><br>
+            <span style="font-size:0.72rem; color:#a0a7b5;">프로필 공유 및 친구 찾기</span></span>
+          </label>
+        </div>
+
+        <div class="modal-foot">
+          <button type="submit" class="btn-primary full-width">완료 및 시작하기</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+
+  <!-- 1. SETTINGS & PROFILE GEAR MODAL -->
+  <div class="modal-backdrop" id="settingsModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>설정</h3>
+        <button class="btn-close" id="btnCloseSettings"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="profile-preview-card">
+          <div class="profile-img-wrap">
+            <img src="images/default_profile.jpg" id="settingsAvatarImg" class="settings-avatar-large" alt="Profile">
+            <label for="inputSettingsPhoto" class="photo-edit-badge" title="사진 변경">
+              <i data-lucide="camera"></i>
+            </label>
+            <input type="file" id="inputSettingsPhoto" accept="image/*" style="display:none;">
+          </div>
+          <h3 id="settingsNameText" class="settings-name">닉네임</h3>
+          <p id="settingsLocText" class="settings-loc">위치 정보</p>
+        </div>
+
+        <!-- 닉네임 설정 -->
+        <div class="input-group">
+          <label>닉네임 변경</label>
+          <input type="text" id="inputSettingsName" placeholder="새 닉네임 입력">
+        </div>
+
+        <!-- 프로필 저장 버튼 -->
+        <button class="btn-primary full-width" id="btnSaveSettings" style="margin-top:4px;">
+          <i data-lucide="save" style="width:16px;height:16px;"></i> 저장
+        </button>
+
+        <div class="input-group">
+          <label>내 친구 코드</label>
+          <div class="code-copy-box">
+            <span id="settingsCodeText" class="code-text">USR-0000-0000</span>
+            <button class="btn-copy-code" id="btnCopySettingsCode">
+              <i data-lucide="copy"></i> 복사
+            </button>
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label>친구 추가</label>
+          <div class="friend-code-add-row">
+            <input type="text" id="inputAddFriendCode" placeholder="친구 코드 입력">
+            <button class="btn-primary" id="btnAddFriendByCode">등록</button>
+          </div>
+        </div>
+
+        <!-- 앱 설치 안내 -->
+        <button type="button" class="btn-secondary full-width" id="btnOpenAppDownload" style="margin-top:12px;">
+          <i data-lucide="smartphone" style="width:16px;height:16px;"></i> 홈 화면에 앱 설치
+        </button>
+
+        <!-- 로그아웃 버튼 -->
+        <button type="button" class="btn-secondary full-width" id="btnLogout" style="margin-top:8px; background:rgba(239,68,68,0.15); color:#ef4444; border-color:rgba(239,68,68,0.3);">
+          <i data-lucide="log-out" style="width:16px;height:16px;"></i> 로그아웃
+        </button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- 2. MAP LOCATION PICKER MODAL -->
+  <div class="modal-backdrop" id="locationPickerModal">
+    <div class="modal-box" style="max-width:540px;">
+      <div class="modal-head">
+        <h3>약속 장소 선택</h3>
+        <button class="btn-close" id="btnCloseLocationPicker"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body" style="padding:14px;">
+        <p style="font-size:0.8rem; color:#a29bfe; margin-bottom:8px;">지도의 위치를 선택해 주세요.</p>
+        <div id="pickerMapContainer" class="naver-style-map" style="width:100%; height:380px; border-radius:12px; z-index:1;"></div>
+
+        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+          <div class="input-group">
+            <label style="font-size:0.75rem; color:#a0a7b5;">선택한 주소</label>
+            <input type="text" id="pickedAddressResult" placeholder="선택한 장소 주소" style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); color:#fff; padding:10px; border-radius:8px; font-size:0.85rem;" readonly>
+          </div>
+          <div class="input-group">
+            <label style="font-size:0.75rem; color:#a29bfe;">장소 이름 (선택)</label>
+            <input type="text" id="pickedVenueName" placeholder="예: 강남역 11번출구 카페" style="background:rgba(255,255,255,0.08); border:1px solid var(--primary); color:#fff; padding:10px; border-radius:8px; font-size:0.85rem;">
+          </div>
+          <button type="button" class="btn-primary" id="btnConfirmPickLocation" style="margin-top:4px;">이 장소로 선택</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- 3. LIVE MAP TRACKER MODAL -->
+  <div class="modal-backdrop" id="liveMapModal">
+    <div class="modal-box" style="max-width:540px; width:95vw; background:#10131c;">
+      <div class="modal-head">
+        <h3>실시간 위치 지도</h3>
+        <button class="btn-close" id="btnCloseLiveMap"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body" style="padding:12px; gap:8px;">
+        <div id="mapViewHeader" style="font-size:0.85rem; color:#fff; font-weight:700; display:flex; justify-content:space-between; align-items:center;">
+          <span>약속 장소: <strong id="mapTargetLocText" style="color:#a29bfe;">약속 위치</strong></span>
+        </div>
+
+        <div id="mapViewContainer" class="naver-style-map" style="width:100%; height:380px; border-radius:16px; z-index:1; border:1px solid rgba(255,255,255,0.1);"></div>
+
+        <div id="mapFriendsCarousel" class="map-friends-carousel"></div>
+
+        <!-- Arrival Status Split Section -->
+        <div id="arrivalGroupSection" style="margin-top:4px; display:flex; flex-direction:column; gap:8px;"></div>
+
+        <div id="mapFriendDetailCard" class="friend-gps-detail-card" style="margin-top:4px;">
+          <div class="detail-header-row">
+            <div class="detail-user-info">
+              <img id="detailFriendAvatar" src="images/default_profile.jpg" class="detail-avatar">
+              <div>
+                <div class="detail-name-row">
+                  <span id="detailFriendName" class="detail-name">닉네임</span>
+                </div>
+                <div id="detailFriendAddress" class="detail-address">주소 확인 중...</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dynamic-stats-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:nowrap; gap:6px; font-size:0.75rem; color:#a0a7b5; padding:8px 10px; background:rgba(255,255,255,0.04); border-radius:8px; white-space:nowrap;">
+            <span>GPS: <strong id="statGpsStatus" style="color:#00b894;">위치 확인 중</strong></span>
+            <span style="color:rgba(255,255,255,0.2);">|</span>
+            <span>수신: <strong id="statUpdated" style="color:#fff;">-</strong></span>
+            <span style="color:rgba(255,255,255,0.2);">|</span>
+            <span>목적지 거리: <strong id="statDistance" style="color:#a29bfe;">-</strong></span>
+          </div>
+
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+
+  <!-- 4. PARTICIPANT LEAVE CONSENT MODAL -->
+  <div class="modal-backdrop" id="leaveConsentModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>약속 나가기</h3>
+        <button class="btn-close" id="btnCloseLeaveConsent"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body text-center">
+        <p style="font-size:0.95rem; color:#fff; font-weight:700;" id="leaveModalTitle">약속에서 나가시겠습니까?</p>
+        <p style="font-size:0.8rem; color:#a0a7b5; margin-top:6px;">참가자의 동의 확인이 필요합니다.</p>
+
+        <div class="sim-panel" style="margin-top:12px;">
+          <span class="sim-label">동의 상태:</span>
+          <div id="consentStatusList" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn-secondary" id="btnCancelLeave">취소</button>
+        <button type="button" class="btn-primary" id="btnConfirmLeave" style="background:#ff7675;">나가기</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- 5. CREATE PROMISE MODAL -->
+  <div class="modal-backdrop" id="createPromiseModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>약속 만들기</h3>
+        <button class="btn-close" id="btnCloseCreatePromise"><i data-lucide="x"></i></button>
+      </div>
+      <form id="formCreatePromise" class="modal-form">
+        <div class="input-group">
+          <label>약속 이름</label>
+          <input type="text" id="inputPromiseTitle" placeholder="예: 주말 모임" required>
+        </div>
+
+        <div class="input-group">
+          <label>약속 장소</label>
+          <div class="gps-location-row">
+            <input type="text" id="inputPromiseLocation" placeholder="예: 강남역, 홍대입구역" required>
+            <button type="button" class="btn-gps-fetch" id="btnOpenMapPicker">
+              <i data-lucide="map"></i> 지도 선택
+            </button>
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label>장소 상세 이름 (선택)</label>
+          <input type="text" id="inputPromiseVenueName" placeholder="예: 강남역 11번출구 카페">
+        </div>
+
+        <div class="input-group">
+          <label>도착 인정 반경 (m)</label>
+          <input type="number" id="inputAutoArrivalDist" placeholder="300" value="300" step="50" min="50" required>
+          <span style="font-size:0.72rem; color:#a0a7b5; margin-top:2px;">반경 이내 진입 시 자동 도착 처리됩니다. (추천: 300m)</span>
+        </div>
+
+        <div class="input-group">
+          <label>약속 시간</label>
+          <input type="datetime-local" id="inputPromiseTime" required>
+        </div>
+
+        <div class="input-group">
+          <label>약속 나가기 옵션</label>
+          <select id="selectLeaveRule" class="status-select" style="padding:10px; font-size:0.85rem;">
+            <option value="consent" selected>동의 필요 (기본)</option>
+            <option value="free">자유 나가기</option>
+          </select>
+        </div>
+
+        <div class="input-group">
+          <label>참가 친구 선택</label>
+          <div id="friendSelectorList" class="friend-selector-grid"></div>
+        </div>
+
+        <div class="modal-foot">
+          <button type="button" class="btn-secondary" id="btnCancelCreatePromise">취소</button>
+          <button type="submit" class="btn-primary">등록 및 초대</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 6. PWA APP DOWNLOAD GUIDE MODAL -->
+  <div class="modal-backdrop" id="appDownloadModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>앱 설치</h3>
+        <button class="btn-close" id="btnCloseAppDownload"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body">
+        <!-- Hero Section -->
+        <div class="pwa-guide-hero">
+          <div class="pwa-hero-icon">
+            <i data-lucide="smartphone" style="width:26px;height:26px;color:#fff;"></i>
+          </div>
+          <div style="font-size:1rem; font-weight:800; color:#fff;">약속 &amp; 위치 공유</div>
+          <div style="font-size:0.78rem; color:#a0a7b5;">홈 화면에 설치하면 앱으로 사용 가능</div>
+        </div>
+
+        <!-- Direct Install Button -->
+        <button class="btn-pwa-direct-install" id="btnPwaDirectInstall">
+          <i data-lucide="download" style="width:20px;height:20px;"></i>
+          앱 설치하기
+        </button>
+
+        <!-- Platform Tabs -->
+        <div class="pwa-platform-tabs">
+          <button class="pwa-platform-btn active" data-platform="android" id="tabAndroid">Android</button>
+          <button class="pwa-platform-btn" data-platform="ios" id="tabIos">iOS</button>
+          <button class="pwa-platform-btn" data-platform="pc" id="tabPc">PC</button>
+        </div>
+
+        <!-- Android Guide -->
+        <div id="guideAndroid" class="pwa-step-list">
+          <div class="pwa-step-card">
+            <div class="pwa-step-num">1</div>
+            <div class="pwa-step-desc"><strong>Chrome 브라우저</strong>에서 이 페이지를 열어주세요</div>
+          </div>
+          <div class="pwa-step-card">
+            <div class="pwa-step-num">2</div>
+            <div class="pwa-step-desc">상단 우측 <strong>메뉴 버튼</strong>을 탭하세요</div>
+          </div>
+          <div class="pwa-step-card">
+            <div class="pwa-step-num">3</div>
+            <div class="pwa-step-desc"><strong>"앱 설치"</strong> 또는 <strong>"홈 화면에 추가"</strong>를 선택하세요</div>
+          </div>
+          <div class="pwa-step-card">
+            <div class="pwa-step-num">4</div>
+            <div class="pwa-step-desc">확인을 누르면 <strong>홈 화면에 앱 아이콘</strong>이 생성됩니다</div>
+          </div>
+        </div>
+
+        <!-- iOS Guide -->
+        <div id="guideIos" class="pwa-step-list" style="display:none;">
+          <div class="pwa-step-card">
+            <div class="pwa-step-num">1</div>
+            <div class="pwa-step-desc"><strong>Safari 브라우저</strong>에서 이 페이지를 열어주세요 (필수)</div>
+          </div>
+          <div class="pwa-step-card">
+            <div class="pwa-step-num">2</div>
+            <div class="pwa-step-desc">하단의 <strong>공유 버튼</strong>을 탭하세요</div>
+          </div>
+          <div class="pwa-step-card">
+            <div class="pwa-step-num">3</div>
+            <div class="pwa-step-desc">목록에서 <strong>"홈 화면에 추가"</strong>를 선택하세요</div>
+          </div>
+          <div class="pwa-step-card">
+            <div class="pwa-step-num">4</div>
+            <div class="pwa-step-desc">우측 상단 <strong>"추가"</strong> 버튼을 누르면 설치 완료</div>
+          </div>
+        </div>
+
+        <!-- PC Guide -->
+        <div id="guidePc" class="pwa-step-list" style="display:none;">
+          <div class="pwa-step-card">
+            <div class="pwa-step-num">1</div>
+            <div class="pwa-step-desc"><strong>Chrome</strong> 또는 <strong>Edge</strong> 브라우저에서 이 페이지를 열어주세요</div>
+          </div>
+          <div class="pwa-step-card">
+            <div class="pwa-step-num">2</div>
+            <div class="pwa-step-desc">주소창 우측의 <strong>설치 아이콘</strong>을 클릭하세요</div>
+          </div>
+          <div class="pwa-step-card">
+            <div class="pwa-step-num">3</div>
+            <div class="pwa-step-desc"><strong>"설치"</strong> 버튼을 누르면 데스크톱 앱으로 설치됩니다</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/gps.js?v=42"></script>
+  <script src="js/app.js?v=42"></script>
+
+  <script>
+    // PWA Service Worker Registration & Installation Prompt Handler
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js?v=42').then(reg => {
+        reg.update();
+      }).catch(err => {});
+    }
+
+    let deferredPrompt;
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+    });
+
+    // App Download Modal Open/Close
+    const btnOpenAppDownload = document.getElementById('btnOpenAppDownload');
+    const btnCloseAppDownload = document.getElementById('btnCloseAppDownload');
+    const appDownloadModal = document.getElementById('appDownloadModal');
+    const btnPwaDirectInstall = document.getElementById('btnPwaDirectInstall');
+
+    if (btnOpenAppDownload) {
+      btnOpenAppDownload.addEventListener('click', () => {
+        appDownloadModal.classList.add('active');
+        if (window.lucide) window.lucide.createIcons();
+      });
+    }
+
+    if (btnCloseAppDownload) {
+      btnCloseAppDownload.addEventListener('click', () => appDownloadModal.classList.remove('active'));
+    }
+
+    // Direct Install Button
+    if (btnPwaDirectInstall) {
+      btnPwaDirectInstall.addEventListener('click', () => {
+        if (deferredPrompt) {
+          deferredPrompt.prompt();
+          deferredPrompt.userChoice.then((choiceResult) => {
+            if (choiceResult.outcome === 'accepted') {
+              alert('앱 설치가 완료되었습니다. 홈 화면에서 앱을 실행하세요.');
+            }
+            deferredPrompt = null;
+          });
+        } else {
+          // Detect platform and show relevant guide
+          const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+          if (isIos) {
+            alert('아이폰 앱 설치 방법\n\n1. Safari 브라우저에서 이 페이지를 열어주세요\n2. 하단 공유 버튼 탭\n3. "홈 화면에 추가" 선택\n4. "추가" 버튼 클릭');
+          } else {
+            alert('앱 설치 방법\n\n1. Chrome 브라우저에서 이 페이지를 열어주세요\n2. 상단 메뉴에서 "앱 설치" 또는 "홈 화면에 추가" 선택\n3. 확인을 누르면 홈 화면에 앱이 설치됩니다');
+          }
+        }
+      });
+    }
+
+    // Platform Tab Switching
+    const platformBtns = document.querySelectorAll('.pwa-platform-btn');
+    const guideAndroid = document.getElementById('guideAndroid');
+    const guideIos = document.getElementById('guideIos');
+    const guidePc = document.getElementById('guidePc');
+
+    platformBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        platformBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        const platform = btn.getAttribute('data-platform');
+        guideAndroid.style.display = platform === 'android' ? 'flex' : 'none';
+        guideIos.style.display = platform === 'ios' ? 'flex' : 'none';
+        guidePc.style.display = platform === 'pc' ? 'flex' : 'none';
+      });
+    });
+  </script>
+</body>
+</html>

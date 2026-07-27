@@ -1,0 +1,47 @@
+{
+  "name": "세이피 (Safey) - 약속 & 실시간 위치 공유 앱",
+  "short_name": "세이피",
+  "description": "실시간 한국어 상세 위치 및 좌표 기반 약속 모바일 앱",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#121420",
+  "theme_color": "#5865f2",
+  "lang": "ko-KR",
+  "categories": ["lifestyle", "utilities", "productivity"],
+  "icons": [
+    {
+      "src": "images/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "images/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "images/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "약속 만들기",
+      "short_name": "약속생성",
+      "description": "새로운 약속을 생성하고 친구를 초대합니다.",
+      "url": "./index.html?action=create"
+    },
+    {
+      "name": "실시간 내 위치",
+      "short_name": "위치확인",
+      "description": "현재 내 한국어 상세 위치 및 좌표를 확인합니다.",
+      "url": "./index.html?action=location"
+    }
+  ]
+}
