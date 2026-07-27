@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ko" data-theme="dark">
+<html lang="ko" data-theme="dark" style="background-color: #1b222d !important;">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -8,21 +8,22 @@
   <!-- PWA Manifest & Mobile App Support -->
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#1b222d">
+  <meta name="apple-mobile-web-app-status-bar-style" content="#1b222d">
   <style>
-    html, body { background-color: #1b222d !important; }
+    html, body { background-color: #1b222d !important; background: #1b222d !important; margin:0; padding:0; }
   </style>
   <script>
     (function () {
       try {
         var bg = '#1b222d';
         document.documentElement.style.backgroundColor = bg;
+        if (document.body) document.body.style.backgroundColor = bg;
         var m = document.querySelector('meta[name="theme-color"]');
         if (m) m.setAttribute('content', bg);
       } catch (e) {}
     })();
   </script>
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="세이피">
   <link rel="apple-touch-icon" href="images/icon-192.png">
   <link rel="icon" type="image/png" sizes="192x192" href="images/icon-192.png">
@@ -37,8 +38,8 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <link rel="stylesheet" href="css/style.css?v=71">
-  <link rel="stylesheet" href="css/enhance.css?v=71">
+  <link rel="stylesheet" href="css/style.css?v=75">
+  <link rel="stylesheet" href="css/enhance.css?v=75">
 
   <!-- Official Google Identity Services & Apple ID Auth SDKs -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -49,7 +50,7 @@
   <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
 </head>
-<body>
+<body style="background-color: #1b222d !important; background: #1b222d !important;">
 
   <!-- App Splash Screen (초기 로딩 화면 - 텍스트 없이 3D 아이콘만 깔끔하게) -->
   <div id="appSplashScreen" class="splash-screen">

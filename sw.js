@@ -1,5 +1,5 @@
 /* Service Worker for Promise App PWA Installation & Offline Support */
-const CACHE_VERSION = 'v70';
+const CACHE_VERSION = 'v75';
 const CACHE_NAME = `promise-app-${CACHE_VERSION}`;
 
 // 쿼리스트링(?v=) 없이 등록하고, 조회 시 ignoreSearch 로 매칭한다.
@@ -11,6 +11,7 @@ const ASSETS = [
   './js/app.js',
   './js/gps.js',
   './manifest.json',
+  './images/app_icon.png',
   './images/icon-192.png',
   './images/icon-512.png',
   './images/default_profile.jpg'
