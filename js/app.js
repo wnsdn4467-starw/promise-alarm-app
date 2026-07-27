@@ -73,6 +73,42 @@ document.addEventListener('DOMContentLoaded', () => {
     return String(raw || '').toLowerCase().trim().replace(/[.#$[\]/]/g, '_');
   }
 
+  // ==========================================
+  // Firebase Auth uid
+  //   DB 보안 규칙이 "노드의 주인"을 증명하는 유일한 수단이다.
+  //   프로필/위치/친구 데이터에 uid 를 함께 저장한다.
+  // ==========================================
+  function currentAuthUid() {
+    try {
+      if (window.firebase && firebase.auth && firebase.auth().currentUser) {
+        return firebase.auth().currentUser.uid || null;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  // 로그인된 uid 를 프로필에 채워 넣는다. (기존 사용자 마이그레이션 포함)
+  function ensureProfileUid() {
+    if (!userProfile) return null;
+    const liveUid = currentAuthUid();
+    if (liveUid && userProfile.uid !== liveUid) {
+      userProfile.uid = liveUid;
+      saveStorage('pa_user_profile', userProfile);
+    }
+    return userProfile.uid || liveUid || null;
+  }
+
+  // 쓰기 실패(주로 규칙 위반)를 조용히 삼키지 않고 원인을 남긴다.
+  function dbWrite(path, value) {
+    if (!dbRef) return Promise.resolve(false);
+    const ref = dbRef.ref(path);
+    const op = value === null ? ref.remove() : ref.set(value);
+    return op.then(() => true).catch((err) => {
+      console.warn(`[DB] 쓰기 실패 ${path}:`, err && err.message ? err.message : err);
+      return false;
+    });
+  }
+
   // User Profile & Pure Dynamic GPS State
   let userProfile = loadStorage('pa_user_profile', null);
   let customUploadedAvatar = userProfile ? (userProfile.avatar || DEFAULT_AVATAR) : DEFAULT_AVATAR;
@@ -413,7 +449,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function publishMyLocation() {
     if (!dbRef || !userProfile || !hasLocationFix()) return;
     const myKey = codeKey(userProfile.code);
-    if (!myKey) return;
+    const myUid = ensureProfileUid();
+    if (!myKey || !myUid) return;
 
     const now = Date.now();
     const movedEnough = lastPublishedLat === null
@@ -424,7 +461,8 @@ document.addEventListener('DOMContentLoaded', () => {
     lastPublishedLat = userRealGpsLat;
     lastPublishedLng = userRealGpsLng;
 
-    dbRef.ref('user_locations/' + myKey).set({
+    dbWrite('user_locations/' + myKey, {
+      uid: myUid,
       name: userProfile.name || '',
       avatar: userProfile.avatar || DEFAULT_AVATAR,
       lat: userRealGpsLat,
@@ -487,6 +525,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (firebase.auth) {
           firebase.auth().onAuthStateChanged((authUser) => {
+            if (authUser && userProfile && userProfile.name) {
+              // 로그인이 확인되면 uid 를 프로필에 채우고 규칙이 요구하는 형태로 재동기화
+              if (userProfile.uid !== authUser.uid) {
+                userProfile.uid = authUser.uid;
+                saveStorage('pa_user_profile', userProfile);
+                lastSyncedProfileJson = '';
+                syncUserProfileToCloud();
+                publishMyLocation();
+              }
+              return;
+            }
             if (authUser && authUser.email && (!userProfile || !userProfile.name)) {
               handleSocialLoginSuccess('google', authUser.displayName || 'Google 사용자', authUser.email, authUser.photoURL || DEFAULT_AVATAR);
             }
@@ -508,13 +557,13 @@ document.addEventListener('DOMContentLoaded', () => {
     saveStorage('pa_promises_list', promisesList);
     if (!dbRef) return;
     if (changedPromise && changedPromise.id) {
-      dbRef.ref('promises/' + changedPromise.id).set(changedPromise);
+      dbWrite('promises/' + changedPromise.id, changedPromise);
     }
   }
 
   function removePromiseFromCloud(promiseId) {
     saveStorage('pa_promises_list', promisesList);
-    if (dbRef && promiseId) dbRef.ref('promises/' + promiseId).remove();
+    if (dbRef && promiseId) dbWrite('promises/' + promiseId, null);
   }
 
   // DOM Elements
@@ -662,8 +711,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const restoreExistingProfile = (foundUser) => {
       userProfile = foundUser;
+      // 다른 기기/재설치 후 복구 시에도 현재 로그인 uid 로 갱신한다.
+      const liveUid = currentAuthUid();
+      if (liveUid) userProfile.uid = liveUid;
       customUploadedAvatar = userProfile.avatar || DEFAULT_AVATAR;
       saveStorage('pa_user_profile', userProfile);
+      lastSyncedProfileJson = '';
       syncUserProfileToCloud();
       if (onboardingModal) onboardingModal.classList.remove('active');
       updateHeaderProfile();
@@ -927,8 +980,9 @@ document.addEventListener('DOMContentLoaded', () => {
         name: name,
         email: email,
         avatar: customUploadedAvatar || pendingSocialAuth?.avatarUrl || DEFAULT_AVATAR,
-        location: location,
+        location: currentAddressText || location,
         code: userCode,
+        uid: currentAuthUid() || '',
         authProvider: providerStr,
         termsAgreedAt: new Date().toISOString()
       };
@@ -984,10 +1038,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const myCode = ensureUserCode();
     if (!myCode) return;
 
+    ensureProfileUid();
     saveStorage('pa_user_profile', userProfile);
+
     if (dbRef) {
       const myKey = codeKey(myCode);
       if (!myKey) return;
+
+      // uid 가 없으면 보안 규칙에 막힌다. 로그인 완료 후 다시 시도된다.
+      if (!userProfile.uid) {
+        console.warn('[DB] 로그인 uid 를 아직 확인하지 못해 프로필 동기화를 보류합니다.');
+        return;
+      }
 
       // 초기화 경로가 여러 개라 동일 프로필이 반복 write 되는 것을 막는다.
       const payload = JSON.stringify(userProfile);
@@ -995,11 +1057,18 @@ document.addEventListener('DOMContentLoaded', () => {
         lastSyncedProfileJson = payload;
 
         // 정규 키(core) 하나만 사용한다. 과거처럼 3중 키로 중복 저장하지 않는다.
-        dbRef.ref('shared_users/' + myKey).set(userProfile);
+        dbWrite('shared_users/' + myKey, userProfile);
+
+        // uid -> 친구코드 역인덱스. 보안 규칙이 "이 사람이 내 친구인가"를 판단하는 데 쓴다.
+        dbWrite('uid_to_code/' + userProfile.uid, myKey);
 
         // 계정 복구용 이메일 인덱스 (전체 노드 스캔 대체)
         if (userProfile.email) {
-          dbRef.ref('users_by_email/' + emailKey(userProfile.email)).set({ code: userProfile.code, key: myKey });
+          dbWrite('users_by_email/' + emailKey(userProfile.email), {
+            code: userProfile.code,
+            key: myKey,
+            uid: userProfile.uid
+          });
         }
       }
       listenToMyCloudData();
@@ -1015,7 +1084,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const fKey = codeKey(f && f.code);
         if (fKey) friendsObj[fKey] = f;
       });
-      dbRef.ref('user_friends/' + myKey).set(friendsObj);
+      dbWrite('user_friends/' + myKey, friendsObj);
     }
   }
 
@@ -1344,6 +1413,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const reqData = {
         fromCode: myCode,
+        fromUid: ensureProfileUid() || '',
         fromName: userProfile ? userProfile.name : '친구',
         fromEmail: userProfile ? (userProfile.email || '') : '',
         fromAvatar: userProfile ? (userProfile.avatar || DEFAULT_AVATAR) : DEFAULT_AVATAR,
@@ -1355,7 +1425,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // 상대방의 정규 키 노드로 친구 요청 전송
       const targetKey = codeKey(targetUser.code);
       if (targetKey) {
-        dbRef.ref('friend_requests/' + targetKey + '/' + mine.core).set(reqData);
+        dbWrite('friend_requests/' + targetKey + '/' + mine.core, reqData);
       }
 
       codeInputEl.value = '';
@@ -1473,6 +1543,7 @@ document.addEventListener('DOMContentLoaded', () => {
       id: 'f_' + Date.now(),
       name: req.fromName || '친구',
       code: req.fromCode,
+      uid: req.fromUid || '',
       email: req.fromEmail || '',
       avatar: req.fromAvatar || DEFAULT_AVATAR,
       homeLoc: req.fromLoc || '내 친구'
@@ -1482,6 +1553,7 @@ document.addEventListener('DOMContentLoaded', () => {
       id: 'f_' + Date.now(),
       name: userProfile.name,
       code: myCode,
+      uid: ensureProfileUid() || '',
       email: userProfile.email || '',
       avatar: userProfile.avatar || DEFAULT_AVATAR,
       homeLoc: userProfile.location || '내 친구'
@@ -1496,9 +1568,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const fromKey = codeKey(req.fromCode);
 
       if (myKey && fromKey) {
-        dbRef.ref('user_friends/' + myKey + '/' + fromKey).set(friendForMe);
-        dbRef.ref('user_friends/' + fromKey + '/' + myKey).set(friendForThem);
-        dbRef.ref('friend_requests/' + myKey + '/' + fromKey).remove();
+        dbWrite('user_friends/' + myKey + '/' + fromKey, friendForMe);
+        // 상대방 목록에는 "내 uid 가 담긴 내 정보"만 쓸 수 있다 (규칙에서 검사)
+        dbWrite('user_friends/' + fromKey + '/' + myKey, friendForThem);
+        dbWrite('friend_requests/' + myKey + '/' + fromKey, null);
       }
     }
 
@@ -1514,7 +1587,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (dbRef) {
       const fromKey = codeKey(fromCode);
-      if (fromKey) dbRef.ref('friend_requests/' + myKey + '/' + fromKey).remove();
+      if (fromKey) dbWrite('friend_requests/' + myKey + '/' + fromKey, null);
     }
 
     friendRequestsList = friendRequestsList.filter(r => r.fromCode !== fromCode);
@@ -2256,6 +2329,7 @@ document.addEventListener('DOMContentLoaded', () => {
         dateTime: dateStr,
         leaveRule: leaveRule,
         hostName: myName,
+        hostUid: ensureProfileUid() || '',
         arrivalRadiusMeters: arrivalRadiusMeters,
         lat: venueLat,
         lng: venueLng,

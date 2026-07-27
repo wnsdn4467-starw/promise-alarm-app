@@ -1,0 +1,19 @@
+{
+  "database": {
+    "rules": "database.rules.json"
+  },
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      ".firebaserc",
+      "database.rules.json",
+      "**/.*",
+      "**/node_modules/**",
+      "server.js",
+      "ps_server.ps1",
+      "*.bat",
+      "css/style.original.css"
+    ]
+  }
+}

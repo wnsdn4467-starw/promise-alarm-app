@@ -1,0 +1,65 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "uid_to_code": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid",
+        ".validate": "newData.isString()"
+      }
+    },
+
+    "shared_users": {
+      "$userCode": {
+        ".read": "auth != null",
+        ".write": "auth != null && (!data.exists() || data.child('uid').val() === auth.uid) && (!newData.exists() || newData.child('uid').val() === auth.uid)",
+        ".validate": "newData.hasChildren(['name', 'code', 'uid'])"
+      }
+    },
+
+    "users_by_email": {
+      "$emailKey": {
+        ".read": "auth != null",
+        ".write": "auth != null && (!data.exists() || data.child('uid').val() === auth.uid) && (!newData.exists() || newData.child('uid').val() === auth.uid)"
+      }
+    },
+
+    "user_locations": {
+      "$userCode": {
+        ".read": "auth != null && (data.child('uid').val() === auth.uid || root.child('user_friends').child($userCode).child(root.child('uid_to_code').child(auth.uid).val()).exists())",
+        ".write": "auth != null && (!data.exists() || data.child('uid').val() === auth.uid) && (!newData.exists() || newData.child('uid').val() === auth.uid)",
+        ".validate": "newData.hasChildren(['uid', 'lat', 'lng', 'updatedAt']) && newData.child('lat').isNumber() && newData.child('lng').isNumber()"
+      }
+    },
+
+    "friend_requests": {
+      "$toCode": {
+        ".read": "auth != null && root.child('uid_to_code').child(auth.uid).val() === $toCode",
+        "$fromCode": {
+          ".write": "auth != null && (root.child('uid_to_code').child(auth.uid).val() === $toCode || (newData.exists() && newData.child('fromUid').val() === auth.uid))",
+          ".validate": "newData.hasChildren(['fromCode', 'fromUid', 'fromName'])"
+        }
+      }
+    },
+
+    "user_friends": {
+      "$ownerCode": {
+        ".read": "auth != null && root.child('uid_to_code').child(auth.uid).val() === $ownerCode",
+        ".write": "auth != null && root.child('uid_to_code').child(auth.uid).val() === $ownerCode",
+        "$friendCode": {
+          ".write": "auth != null && newData.exists() && newData.child('uid').val() === auth.uid"
+        }
+      }
+    },
+
+    "promises": {
+      ".read": "auth != null",
+      "$promiseId": {
+        ".write": "auth != null && (!data.exists() || !newData.exists() || !data.child('hostUid').exists() || data.child('hostUid').val() === newData.child('hostUid').val())",
+        ".validate": "newData.hasChildren(['id', 'title', 'participants'])"
+      }
+    }
+  }
+}
