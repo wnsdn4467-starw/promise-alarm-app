@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ko" data-theme="dark">
+<html lang="ko" data-theme="dark" style="background-color: #1b222d !important;">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -7,17 +7,19 @@
 
   <!-- PWA Manifest & Mobile App Support -->
   <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#000000">
+  <meta name="theme-color" content="#1b222d">
+  <meta name="apple-mobile-web-app-status-bar-style" content="#1b222d">
   <style>
-    .splash-screen { background-color: #1b222d !important; }
+    html, body, .splash-screen { background-color: #1b222d !important; background: #1b222d !important; margin:0; padding:0; }
   </style>
   <script>
     (function () {
       try {
-        var t = localStorage.getItem('pa_theme') === 'light' ? 'light' : 'dark';
-        document.documentElement.setAttribute('data-theme', t);
+        var bg = '#1b222d';
+        document.documentElement.style.backgroundColor = bg;
+        if (document.body) document.body.style.backgroundColor = bg;
         var m = document.querySelector('meta[name="theme-color"]');
-        if (m) m.setAttribute('content', t === 'light' ? '#ffffff' : '#000000');
+        if (m) m.setAttribute('content', bg);
       } catch (e) {}
     })();
   </script>

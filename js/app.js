@@ -4067,8 +4067,10 @@ document.addEventListener('DOMContentLoaded', () => {
         splash.classList.add('fade-out');
         setTimeout(() => {
           if (splash.parentElement) splash.remove();
-        }, 450);
-      }, 650);
+          document.documentElement.style.backgroundColor = '';
+          if (document.body) document.body.style.backgroundColor = '';
+        }, 350);
+      }, 600);
     }
   }
 
