@@ -489,3 +489,11 @@ html[data-theme='light'] {
   .cd-m5, .cd-now, .cd-m5 .cd-dot, .cd-now .cd-dot,
   .complete-card, .complete-check, .complete-wish { animation: none; }
 }
+
+
+/* ==========================================================================
+   9. 헤더: 브랜드(아이콘 + 세이피) 제거 후 프로필 칩을 오른쪽에 유지
+   ========================================================================== */
+.app-header {
+  justify-content: flex-end;
+}
