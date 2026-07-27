@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ko" data-theme="dark" style="background-color: #ffffff !important;">
+<html lang="ko" data-theme="light" style="background-color: #ffffff !important;">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -8,27 +8,26 @@
   <!-- PWA Manifest & Mobile App Support -->
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#ffffff">
-  <meta name="apple-mobile-web-app-status-bar-style" content="#ffffff">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <style>
     html, body, .splash-screen { background-color: #ffffff !important; background: #ffffff !important; margin:0; padding:0; }
   </style>
   <script>
     (function () {
       try {
-        var bg = '#ffffff';
-        document.documentElement.style.backgroundColor = bg;
-        if (document.body) document.body.style.backgroundColor = bg;
+        var t = localStorage.getItem('pa_theme') || 'light';
+        document.documentElement.setAttribute('data-theme', t);
         var m = document.querySelector('meta[name="theme-color"]');
-        if (m) m.setAttribute('content', bg);
+        if (m) m.setAttribute('content', t === 'dark' ? '#000000' : '#ffffff');
       } catch (e) {}
     })();
   </script>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="세이피">
-  <link rel="apple-touch-icon" sizes="180x180" href="images/app_icon.png?v=95">
-  <link rel="apple-touch-icon" href="images/icon-192.png?v=95">
-  <link rel="icon" type="image/png" sizes="192x192" href="images/icon-192.png?v=95">
-  <link rel="icon" type="image/png" sizes="512x512" href="images/icon-512.png?v=95">
+  <link rel="apple-touch-icon" sizes="180x180" href="images/app_icon.png?v=100">
+  <link rel="apple-touch-icon" href="images/icon-192.png?v=100">
+  <link rel="icon" type="image/png" sizes="192x192" href="images/icon-192.png?v=100">
+  <link rel="icon" type="image/png" sizes="512x512" href="images/icon-512.png?v=100">
 
   <!-- Google Fonts & Lucide Icons -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -40,8 +39,8 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <link rel="stylesheet" href="css/style.css?v=92">
-  <link rel="stylesheet" href="css/enhance.css?v=92">
+  <link rel="stylesheet" href="css/style.css?v=100">
+  <link rel="stylesheet" href="css/enhance.css?v=100">
 
   <!-- Official Google Identity Services & Apple ID Auth SDKs -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -54,12 +53,14 @@
 </head>
 <body style="background-color: #ffffff !important; background: #ffffff !important;">
 
-  <!-- App Splash Screen (초기 로딩 화면 - 새 보라색 3D 아이콘 단독 노출) -->
+  <!-- App Splash Screen (초기 로딩 화면 - 3D 퍼플 아이콘 & 브랜드 타이틀) -->
   <div id="appSplashScreen" class="splash-screen">
     <div class="splash-content">
       <div class="splash-icon-wrapper">
         <img src="images/app_icon.png" alt="세이피" class="splash-icon">
       </div>
+      <h2 class="splash-title">세이피</h2>
+      <p class="splash-subtitle">약속 &amp; 실시간 위치 공유</p>
     </div>
   </div>
 
