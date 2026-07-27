@@ -12,57 +12,18 @@
 }
 
 /* ==========================================================================
-   THEME: DARK (기본) - 검정 / 회색 모노톤
+   THEME: LIGHT (기본) - 흰색 / 회색 모노톤
    ========================================================================== */
 html,
-html[data-theme='dark'] {
-  --bg-main: #000000;
-  --shell-bg: #000000;
-  --bg-card: #1c1c1e;
-  --bg-card-hover: #26262a;
-  --bg-subtle: rgba(255, 255, 255, 0.08);
-  --bg-inset: rgba(0, 0, 0, 0.35);
-  --border-color: rgba(255, 255, 255, 0.08);
-  --header-bg: rgba(0, 0, 0, 0.88);
-  --overlay-bg: rgba(0, 0, 0, 0.72);
-
-  --text-main: #f2f2f5;
-  --text-muted: #9b9ba3;
-  --text-dim: #6f6f78;
-
-  /* 강조색도 무채색: 밝은 회색 + 어두운 글자 */
-  --primary: #dcdce0;
-  --primary-hover: #f8f8f9;
-  --primary-contrast: #0b0b0d;
-  --primary-soft: #c8c8ce;
-  --primary-soft-bg: rgba(255, 255, 255, 0.11);
-
-  /* 상태색: 명도 차이로 구분 (도착=밝음, 미도착=어두움) */
-  --green: #f4f4f5;
-  --green-soft: rgba(255, 255, 255, 0.11);
-  --yellow: #cfcfd6;
-  --yellow-soft: rgba(255, 255, 255, 0.07);
-  --red: #9a9aa3;
-  --red-soft: rgba(255, 255, 255, 0.06);
-  --danger-strong: #3a3a40;
-
-  --shadow-strong: 0 24px 60px rgba(0, 0, 0, 0.7);
-  --map-filter: grayscale(100%) brightness(0.72) contrast(1.08);
-  color-scheme: dark;
-}
-
-/* ==========================================================================
-   THEME: LIGHT - 흰색 / 회색 모노톤
-   ========================================================================== */
 html[data-theme='light'] {
-  --bg-main: #f2f2f4;
-  --shell-bg: #f2f2f4;
+  --bg-main: #ffffff;
+  --shell-bg: #ffffff;
   --bg-card: #ffffff;
   --bg-card-hover: #f7f7f9;
-  --bg-subtle: rgba(0, 0, 0, 0.05);
-  --bg-inset: rgba(0, 0, 0, 0.045);
-  --border-color: rgba(0, 0, 0, 0.07);
-  --header-bg: rgba(242, 242, 244, 0.9);
+  --bg-subtle: rgba(0, 0, 0, 0.04);
+  --bg-inset: rgba(0, 0, 0, 0.035);
+  --border-color: rgba(0, 0, 0, 0.08);
+  --header-bg: rgba(255, 255, 255, 0.92);
   --overlay-bg: rgba(24, 24, 27, 0.4);
 
   --text-main: #16161a;
@@ -83,9 +44,46 @@ html[data-theme='light'] {
   --red-soft: rgba(0, 0, 0, 0.05);
   --danger-strong: #26262a;
 
-  --shadow-strong: 0 18px 40px rgba(0, 0, 0, 0.13);
-  --map-filter: grayscale(100%) contrast(1.02);
+  --shadow-strong: 0 18px 40px rgba(0, 0, 0, 0.08);
+  --map-filter: none;
   color-scheme: light;
+}
+
+/* ==========================================================================
+   THEME: DARK - 검정 / 회색 모노톤
+   ========================================================================== */
+html[data-theme='dark'] {
+  --bg-main: #000000;
+  --shell-bg: #000000;
+  --bg-card: #1c1c1e;
+  --bg-card-hover: #26262a;
+  --bg-subtle: rgba(255, 255, 255, 0.08);
+  --bg-inset: rgba(0, 0, 0, 0.35);
+  --border-color: rgba(255, 255, 255, 0.08);
+  --header-bg: rgba(0, 0, 0, 0.88);
+  --overlay-bg: rgba(0, 0, 0, 0.72);
+
+  --text-main: #f2f2f5;
+  --text-muted: #9b9ba3;
+  --text-dim: #6f6f78;
+
+  --primary: #dcdce0;
+  --primary-hover: #f8f8f9;
+  --primary-contrast: #0b0b0d;
+  --primary-soft: #c8c8ce;
+  --primary-soft-bg: rgba(255, 255, 255, 0.11);
+
+  --green: #f4f4f5;
+  --green-soft: rgba(255, 255, 255, 0.11);
+  --yellow: #cfcfd6;
+  --yellow-soft: rgba(255, 255, 255, 0.07);
+  --red: #9a9aa3;
+  --red-soft: rgba(255, 255, 255, 0.06);
+  --danger-strong: #3a3a40;
+
+  --shadow-strong: 0 24px 60px rgba(0, 0, 0, 0.7);
+  --map-filter: grayscale(100%) brightness(0.72) contrast(1.08);
+  color-scheme: dark;
 }
 
 * {
@@ -2516,6 +2514,22 @@ html {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.splash-title {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--text-main);
+  letter-spacing: -0.6px;
+  margin-top: 20px;
+  margin-bottom: 4px;
+}
+
+.splash-subtitle {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #8b5cf6;
+  letter-spacing: -0.2px;
 }
 
 @keyframes splashFloat {
