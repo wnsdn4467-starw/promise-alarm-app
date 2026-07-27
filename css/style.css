@@ -2507,7 +2507,7 @@ html {
   height: 144px;
   border-radius: 36px;
   overflow: hidden;
-  box-shadow: 0 18px 45px rgba(147, 51, 234, 0.18), 0 8px 24px rgba(0, 0, 0, 0.06);
+  box-shadow: none;
   animation: splashFloat 2.4s ease-in-out infinite;
 }
 
