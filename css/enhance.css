@@ -1,0 +1,491 @@
+/* ==========================================================================
+   ENHANCE LAYER - style.css 뒤에 로드되어 추가/보정 스타일만 담는다.
+   (style.css 를 직접 수정하면 외부 프로세스에 의해 되돌려지는 문제가 있어 분리)
+   ========================================================================== */
+
+/* ==========================================================================
+   1. 남은 시간 배지 색상 토큰
+   기본 UI 는 모노톤이지만, 남은 시간은 긴급도를 즉시 읽어야 하므로 예외로 색을 쓴다.
+   ========================================================================== */
+html,
+html[data-theme='dark'] {
+  --cd-far-fg: #a1a1aa;
+  --cd-far-bg: rgba(255, 255, 255, 0.07);
+  --cd-today-fg: #7dd3fc;
+  --cd-today-bg: rgba(56, 189, 248, 0.16);
+  --cd-h1-fg: #fcd34d;
+  --cd-h1-bg: rgba(250, 204, 21, 0.16);
+  --cd-m30-fg: #fdba74;
+  --cd-m30-bg: rgba(251, 146, 60, 0.18);
+  --cd-m10-fg: #fca5a5;
+  --cd-m10-bg: rgba(248, 113, 113, 0.18);
+  --cd-solid-fg: #ffffff;
+  --cd-m5-bg: #dc2626;
+  --cd-now-bg: #b91c1c;
+  --cd-late-fg: #f4f4f5;
+  --cd-late-bg: #4b5563;
+  --cd-live-fg: #86efac;
+  --cd-live-bg: rgba(34, 197, 94, 0.18);
+  --cd-done-fg: #a1a1aa;
+  --cd-done-bg: rgba(255, 255, 255, 0.07);
+}
+
+html[data-theme='light'] {
+  --cd-far-fg: #52525b;
+  --cd-far-bg: rgba(0, 0, 0, 0.055);
+  --cd-today-fg: #0369a1;
+  --cd-today-bg: rgba(2, 132, 199, 0.12);
+  --cd-h1-fg: #92400e;
+  --cd-h1-bg: rgba(217, 119, 6, 0.14);
+  --cd-m30-fg: #9a3412;
+  --cd-m30-bg: rgba(234, 88, 12, 0.14);
+  --cd-m10-fg: #b91c1c;
+  --cd-m10-bg: rgba(220, 38, 38, 0.13);
+  --cd-solid-fg: #ffffff;
+  --cd-m5-bg: #dc2626;
+  --cd-now-bg: #991b1b;
+  --cd-late-fg: #ffffff;
+  --cd-late-bg: #52525b;
+  --cd-live-fg: #15803d;
+  --cd-live-bg: rgba(22, 163, 74, 0.12);
+  --cd-done-fg: #52525b;
+  --cd-done-bg: rgba(0, 0, 0, 0.055);
+}
+
+/* ==========================================================================
+   2. 약속 제목 오른쪽 남은 시간 배지
+   ========================================================================== */
+.card-header-row .card-title {
+  min-width: 0;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.countdown-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+.countdown-badge .cd-main {
+  font-size: 0.83rem;
+  font-weight: 900;
+}
+
+.countdown-badge .cd-suffix {
+  font-size: 0.69rem;
+  font-weight: 700;
+  opacity: 0.78;
+}
+
+.countdown-badge .cd-suffix:empty {
+  display: none;
+}
+
+.countdown-badge .cd-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.cd-far   { color: var(--cd-far-fg);   background: var(--cd-far-bg);   border-color: var(--cd-far-bg); }
+.cd-today { color: var(--cd-today-fg); background: var(--cd-today-bg); border-color: var(--cd-today-bg); }
+.cd-h1    { color: var(--cd-h1-fg);    background: var(--cd-h1-bg);    border-color: var(--cd-h1-bg); }
+.cd-m30   { color: var(--cd-m30-fg);   background: var(--cd-m30-bg);   border-color: var(--cd-m30-bg); }
+.cd-m10   { color: var(--cd-m10-fg);   background: var(--cd-m10-bg);   border-color: var(--cd-m10-bg); }
+.cd-done  { color: var(--cd-done-fg);  background: var(--cd-done-bg);  border-color: var(--cd-done-bg); }
+
+.cd-m5,
+.cd-now,
+.cd-late {
+  color: var(--cd-solid-fg);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+}
+
+.cd-m5   { background: var(--cd-m5-bg); }
+.cd-now  { background: var(--cd-now-bg); }
+.cd-late { background: var(--cd-late-bg); color: var(--cd-late-fg); }
+
+.cd-m5 .cd-dot,
+.cd-now .cd-dot {
+  animation: cd-pulse 1s ease-in-out infinite;
+}
+
+.cd-m5,
+.cd-now {
+  animation: cd-glow 1.6s ease-in-out infinite;
+}
+
+@keyframes cd-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.55); opacity: 0.45; }
+}
+
+@keyframes cd-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.55); }
+  70%      { box-shadow: 0 0 0 7px rgba(220, 38, 38, 0); }
+}
+
+.badge.late {
+  background: var(--cd-m10-bg);
+  color: var(--cd-m10-fg);
+}
+
+/* ==========================================================================
+   3. 사전 알림 토스트 (1시간/30분/10분/5분/1분 전)
+   ========================================================================== */
+.toast-stack {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  top: calc(12px + env(safe-area-inset-top));
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: auto;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-left: 4px solid currentColor;
+  box-shadow: var(--shadow-strong);
+  animation: toast-in 0.26s ease;
+}
+
+.toast-item.is-out {
+  animation: toast-out 0.24s ease forwards;
+}
+
+.toast-item .toast-icon {
+  font-size: 1.15rem;
+  flex-shrink: 0;
+}
+
+.toast-item .toast-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.toast-item .toast-text strong {
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: var(--text-main);
+  overflow-wrap: anywhere;
+}
+
+.toast-item .toast-text span {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.toast-item .toast-close {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.toast-item.cd-today { color: var(--cd-today-fg); }
+.toast-item.cd-h1    { color: var(--cd-h1-fg); }
+.toast-item.cd-m30   { color: var(--cd-m30-fg); }
+.toast-item.cd-m10   { color: var(--cd-m10-fg); }
+.toast-item.cd-m5    { color: var(--cd-m5-bg); }
+.toast-item.cd-now   { color: var(--cd-now-bg); }
+.toast-item.cd-done  { color: var(--cd-done-fg); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toast-out {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-10px); }
+}
+
+/* ==========================================================================
+   4. 캘린더: 오늘만 연한 회색, 약속 있는 날은 다른 날과 동일
+   ========================================================================== */
+.cal-cell.has-promise {
+  background: transparent;
+}
+
+.cal-cell.today,
+.cal-cell.today.has-promise {
+  background: rgba(128, 128, 128, 0.12);
+}
+
+.cal-cell.today .cal-daynum {
+  background: rgba(128, 128, 128, 0.24);
+  color: var(--text-main);
+  font-weight: 800;
+}
+
+.cal-today-label {
+  margin-top: 12px;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.cal-today-label + .cal-summary {
+  margin-top: 4px;
+}
+
+/* ==========================================================================
+   5. 달력 넘김: 한 장이 부드럽게 넘어간다 (움직임은 JS playCalendarFlip 에서 제어)
+   ========================================================================== */
+.calendar-stage {
+  position: relative;
+}
+
+.flip-ghost {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  pointer-events: none;
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  padding: 12px 10px 14px 10px;
+  backface-visibility: hidden;
+  will-change: transform, opacity;
+}
+
+/* ==========================================================================
+   6. 약속 진행 시간 빠른 선택 칩
+   ========================================================================== */
+.duration-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.duration-chip {
+  flex: 1 1 auto;
+  min-width: 58px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.duration-chip.selected {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-contrast);
+}
+
+/* ==========================================================================
+   7. 약속 장소 행: [지도 선택] 버튼이 왼쪽, 선택한 주소가 오른쪽 텍스트
+   ========================================================================== */
+.gps-location-row {
+  align-items: center;
+}
+
+.picked-location-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-main);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.gps-location-row .btn-gps-fetch {
+  padding: 12px 14px;
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   8. 약속 완료 카드 (톡 튀어나오고 약 2초 뒤 사라짐)
+   ========================================================================== */
+.complete-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--overlay-bg);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: completeFadeIn 0.22s ease both;
+}
+
+.complete-overlay.is-out {
+  animation: completeFadeOut 0.4s ease both;
+}
+
+.complete-card {
+  width: 100%;
+  max-width: 320px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-strong);
+  padding: 24px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  animation: completePop 0.62s cubic-bezier(0.18, 1.4, 0.4, 1) both;
+}
+
+.complete-overlay.is-out .complete-card {
+  animation: completePopOut 0.4s ease both;
+}
+
+.complete-check {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: var(--cd-live-bg);
+  color: var(--cd-live-fg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+  animation: completeCheckPop 0.5s 0.12s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+
+.complete-check i {
+  width: 30px;
+  height: 30px;
+  stroke-width: 3;
+}
+
+.complete-title {
+  font-size: 2.1rem;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  color: var(--text-main);
+}
+
+.complete-subtitle {
+  margin-top: 2px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.complete-info {
+  width: 100%;
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  text-align: left;
+}
+
+.complete-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.complete-key {
+  flex: 0 0 34px;
+  color: var(--text-dim);
+  font-weight: 700;
+}
+
+.complete-val {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-main);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.complete-wish {
+  margin-top: 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  animation: completeWish 0.5s 0.3s ease both;
+}
+
+@keyframes completePop {
+  0%   { opacity: 0; transform: scale(0.7) translateY(14px); }
+  55%  { opacity: 1; transform: scale(1.04) translateY(0); }
+  75%  { transform: scale(0.985); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes completePopOut {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.92) translateY(8px); }
+}
+
+@keyframes completeCheckPop {
+  0%   { opacity: 0; transform: scale(0.4) rotate(-18deg); }
+  70%  { opacity: 1; transform: scale(1.12) rotate(3deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0deg); }
+}
+
+@keyframes completeWish {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes completeFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes completeFadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cd-m5, .cd-now, .cd-m5 .cd-dot, .cd-now .cd-dot,
+  .complete-card, .complete-check, .complete-wish { animation: none; }
+}

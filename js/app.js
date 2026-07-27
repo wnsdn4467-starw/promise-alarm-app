@@ -949,36 +949,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (label) label.textContent = `${calViewYear}년 ${calViewMonth + 1}월`;
 
-    // 넘김 애니메이션: 현재 페이지를 복제해 위에 띄우고 회전시킨다.
-    // 아래에는 이미 새 달이 그려져 있어 넘기는 동안 다음 장이 보인다.
-    if (sheet && flipDirection) {
-      const stage = sheet.parentElement;
-      if (stage) {
-        stage.querySelectorAll('.calendar-ghost').forEach((g) => g.remove());
-
-        const ghost = sheet.cloneNode(true);
-        ghost.removeAttribute('id');
-        ghost.className = 'calendar-ghost';
-        ghost.style.height = `${sheet.offsetHeight}px`;
-        stage.appendChild(ghost);
-
-        void ghost.offsetWidth;
-        ghost.classList.add(flipDirection === 'next' ? 'turn-next' : 'turn-prev');
-        ghost.addEventListener('animationend', () => ghost.remove(), { once: true });
-        // 애니메이션 이벤트가 유실되는 경우를 대비한 정리
-        setTimeout(() => { if (ghost.parentElement) ghost.remove(); }, 1100);
-
-        // 아래에 드러나는 새 페이지도 살짝 흔들리며 자리를 잡는다
-        sheet.classList.remove('settle-next', 'settle-prev');
-        void sheet.offsetWidth;
-        sheet.classList.add(flipDirection === 'next' ? 'settle-next' : 'settle-prev');
-        sheet.addEventListener('animationend', () => {
-          sheet.classList.remove('settle-next', 'settle-prev');
-        }, { once: true });
-      }
-    } else if (sheet) {
-      sheet.classList.remove('settle-next', 'settle-prev');
-    }
+    // 넘김 애니메이션: 현재 페이지를 세로 조각으로 복제해 시차를 두고 접듯이 넘긴다.
+    // (직사각형이 통째로 도는 대신 바람에 휘날리는 종이처럼 보이게 한다)
+    if (sheet && flipDirection) playCalendarFlip(sheet, flipDirection);
 
     const firstWeekday = new Date(calViewYear, calViewMonth, 1).getDay();
     const daysInMonth = new Date(calViewYear, calViewMonth + 1, 0).getDate();
@@ -989,7 +962,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let upcomingCount = 0;
     let doneCount = 0;
     let lateCount = 0;
-    const now = Date.now();
 
     for (let i = 0; i < firstWeekday; i++) {
       const pad = document.createElement('div');
@@ -1002,29 +974,30 @@ document.addEventListener('DOMContentLoaded', () => {
       monthCount += dayPromises.length;
 
       const weekday = new Date(calViewYear, calViewMonth, day).getDay();
+      const isToday = today.getFullYear() === calViewYear && today.getMonth() === calViewMonth && today.getDate() === day;
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = 'cal-cell';
       if (weekday === 0) cell.classList.add('sun');
       if (weekday === 6) cell.classList.add('sat');
       if (dayPromises.length > 0) cell.classList.add('has-promise');
-      if (today.getFullYear() === calViewYear && today.getMonth() === calViewMonth && today.getDate() === day) {
+      if (isToday) {
         cell.classList.add('today');
+        cell.setAttribute('aria-current', 'date');
       }
 
-      // 예정 = 체크(✓), 끝난 약속 = 동그라미(○), 지각자 있던 약속 = 빨간 동그라미
+      // 예정 = 체크(✓), 완료 = 동그라미(○), 지각자 있던 완료 = 빨간 동그라미
+      // 완료는 "종료 시간이 지난" 약속만 해당한다.
       const marks = dayPromises.slice(0, 3).map((p) => {
-        const ts = Number(p.targetTimestamp) || 0;
-        if (ts > now) {
+        if (promiseStatus(p) !== 'done') {
           upcomingCount += 1;
           return '<span class="cal-mark-check">✓</span>';
         }
+        doneCount += 1;
         if (latePenaltyNames(p).length > 0) {
           lateCount += 1;
-          doneCount += 1;
           return '<span class="cal-mark-late">○</span>';
         }
-        doneCount += 1;
         return '<span class="cal-mark-done">○</span>';
       }).join('');
 
@@ -1041,6 +1014,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (summary) summary.textContent = `${calViewYear}년 ${calViewMonth + 1}월 약속 ${monthCount}건`;
 
+    // 오늘 날짜를 연한 회색으로 알려준다.
+    const todayLabelEl = document.getElementById('calTodayLabel');
+    if (todayLabelEl) {
+      const weekNames = ['일', '월', '화', '수', '목', '금', '토'];
+      todayLabelEl.textContent = `${today.getFullYear()}년 ${today.getMonth() + 1}월 ${today.getDate()}일 (${weekNames[today.getDay()]})`;
+    }
+
     const legend = document.getElementById('calLegend');
     if (legend) {
       legend.innerHTML = `
@@ -1053,6 +1033,85 @@ document.addEventListener('DOMContentLoaded', () => {
     if (window.lucide) window.lucide.createIcons();
   }
 
+  // ------------------------------------------
+  // 달력 넘김 (한 장이 부드럽게 넘어간다)
+  //  - 이전 달 페이지를 그대로 복제해 한 덩어리로 회전
+  //  - 후반부에 서서히 사라져 끝에서 툭 끊기지 않는다
+  // ------------------------------------------
+  const FLIP_DURATION = 900;
+
+  function playCalendarFlip(sheet, direction) {
+    const stage = sheet.parentElement;
+    if (!stage || typeof sheet.animate !== 'function') return;
+
+    stage.querySelectorAll('.flip-ghost').forEach((g) => g.remove());
+
+    const height = sheet.offsetHeight;
+    if (!height) return;
+
+    const next = direction === 'next';
+    const sign = next ? -1 : 1;
+
+    const ghost = sheet.cloneNode(true);
+    ghost.removeAttribute('id');
+    ghost.className = 'flip-ghost';
+    ghost.style.height = `${height}px`;
+    ghost.style.transformOrigin = next ? 'left center' : 'right center';
+    stage.appendChild(ghost);
+
+    const ghostAnim = ghost.animate([
+      {
+        transform: 'perspective(1500px) rotateY(0deg)',
+        boxShadow: '0 0 0 rgba(0, 0, 0, 0)',
+        filter: 'brightness(1)',
+        opacity: 1,
+        offset: 0
+      },
+      {
+        transform: `perspective(1500px) rotateY(${sign * 55}deg)`,
+        boxShadow: `${next ? 22 : -22}px 12px 34px rgba(0, 0, 0, 0.32)`,
+        filter: 'brightness(0.9)',
+        opacity: 1,
+        offset: 0.42
+      },
+      {
+        transform: `perspective(1500px) rotateY(${sign * 110}deg)`,
+        boxShadow: `${next ? 16 : -16}px 10px 26px rgba(0, 0, 0, 0.2)`,
+        filter: 'brightness(0.8)',
+        opacity: 0.72,
+        offset: 0.72
+      },
+      {
+        transform: `perspective(1500px) rotateY(${sign * 152}deg)`,
+        boxShadow: '0 0 0 rgba(0, 0, 0, 0)',
+        filter: 'brightness(0.72)',
+        opacity: 0,
+        offset: 1
+      }
+    ], {
+      duration: FLIP_DURATION,
+      easing: 'cubic-bezier(0.36, 0.04, 0.28, 1)',
+      fill: 'both'
+    });
+
+    // 아래에서 드러나는 새 페이지도 같은 리듬으로 부드럽게 자리를 잡는다
+    const sheetAnim = sheet.animate([
+      { transform: `perspective(1500px) rotateY(${next ? 8 : -8}deg) scale(0.99)`, filter: 'brightness(0.74)', offset: 0 },
+      { transform: `perspective(1500px) rotateY(${next ? 3 : -3}deg) scale(0.996)`, filter: 'brightness(0.9)', offset: 0.45 },
+      { transform: 'perspective(1500px) rotateY(0deg) scale(1)', filter: 'brightness(1)', offset: 1 }
+    ], {
+      duration: FLIP_DURATION,
+      easing: 'cubic-bezier(0.22, 0.7, 0.24, 1)',
+      fill: 'none'
+    });
+
+    const cleanup = () => {
+      if (ghost.parentElement) ghost.remove();
+      try { sheetAnim.cancel(); } catch (e) {}
+    };
+    ghostAnim.finished.then(cleanup).catch(() => cleanup());
+    setTimeout(cleanup, FLIP_DURATION + 400);
+  }
   function shiftCalendarMonth(delta) {
     calViewMonth += delta;
     if (calViewMonth < 0) { calViewMonth = 11; calViewYear -= 1; }
@@ -1144,20 +1203,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     listEl.innerHTML = '';
     items.forEach((p) => {
-      const d = new Date(Number(p.targetTimestamp));
-      const timeStr = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      const status = promiseStatus(p);
+      const timeStr = promiseTimeRangeLabel(p);
       const names = promiseParticipantNames(p);
-      const lateNames = latePenaltyNames(p);
+      const lateNames = status !== 'done' ? [] : latePenaltyNames(p);
       const locationDisplay = p.venueName
         ? `${p.venueName} (${p.location || ''})`
         : (p.location || '장소 미정');
+
+      const statusBadge = status !== 'done'
+        ? '<span class="badge wait">예정</span>'
+        : (lateNames.length > 0 ? '<span class="badge late">지각 발생</span>' : '<span class="badge done">정시 완료</span>');
 
       const card = document.createElement('div');
       card.className = 'card-item';
       card.innerHTML = `
         <div class="card-header-row">
           <h3 class="card-title">${escapeHtml(p.title || '약속')}</h3>
-          <span class="badge ${lateNames.length > 0 ? 'wait' : 'done'}">${lateNames.length > 0 ? '지각 발생' : '정시 완료'}</span>
+          ${statusBadge}
         </div>
         <div class="card-info">
           <div class="card-info-item"><i data-lucide="clock"></i> <span class="ci-label">시간</span> <span class="ci-value">${escapeHtml(timeStr)}</span></div>
@@ -1797,6 +1860,15 @@ document.addEventListener('DOMContentLoaded', () => {
       });
   }
 
+  // 선택한 약속 장소를 숨은 입력값과 화면 표시 텍스트에 함께 반영한다.
+  function setPromiseLocationValue(address) {
+    const input = document.getElementById('inputPromiseLocation');
+    const textEl = document.getElementById('promiseLocationText');
+    const value = String(address || '');
+    if (input) input.value = value;
+    if (textEl) textEl.textContent = value;
+  }
+
   function closeLocationPickerAndRestorePromiseModal() {
     locationPickerModal.classList.remove('active');
     createPromiseModal.classList.add('active');
@@ -1809,7 +1881,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnConfirmPickLocation) {
     btnConfirmPickLocation.addEventListener('click', () => {
       if (selectedPickedAddress) {
-        document.getElementById('inputPromiseLocation').value = selectedPickedAddress;
+        setPromiseLocationValue(selectedPickedAddress);
       }
       const customVenue = document.getElementById('pickedVenueName').value.trim();
       if (customVenue) {
@@ -2230,8 +2302,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Separate My Promises vs Invited Promises
     // 초대장 = members 에는 있지만 아직 참가(attendees) 하지 않은 약속
-    const invitedPromises = promisesList.filter(p => amIMemberOf(p) && !amIAttendeeOf(p) && !declinedPromiseIds.includes(p.id));
-    const joinedPromises = promisesList.filter(p => amIAttendeeOf(p));
+    const invitedPromises = promisesList.filter(p => amIMemberOf(p) && !amIAttendeeOf(p) && !declinedPromiseIds.includes(p.id) && !isPromiseDone(p));
+    // 종료 시간이 지난 약속은 목록에서 내려가고 캘린더 기록으로만 남는다.
+    const joinedPromises = promisesList.filter(p => amIAttendeeOf(p) && !isPromiseDone(p));
+    const doneCount = promisesList.filter(p => amIAttendeeOf(p) && isPromiseDone(p)).length;
 
     invitedCount = invitedPromises.length;
     updateInboxBadges();
@@ -2260,7 +2334,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <div class="card-info">
             <div class="card-info-item"><i data-lucide="user"></i> <span class="ci-label">주최자</span> <span class="ci-value">${escapeHtml(p.hostName || '친구')}</span></div>
             <div class="card-info-item"><i data-lucide="map-pin"></i> <span class="ci-label">위치</span> <span class="ci-value">${locationDisplay}</span></div>
-            <div class="card-info-item"><i data-lucide="clock"></i> <span class="ci-label">시간</span> <span class="ci-value">${escapeHtml(p.dateTime)}</span></div>
+            <div class="card-info-item"><i data-lucide="clock"></i> <span class="ci-label">시간</span> <span class="ci-value">${escapeHtml(promiseTimeRangeLabel(p))}</span></div>
             <div class="card-info-item"><i data-lucide="${p.penaltyType === 'vibrate' ? 'vibrate' : 'bell-ring'}"></i> <span class="ci-label">지각 벌칙</span> <span class="ci-value">${escapeHtml(penaltyLabel(p))}</span></div>
           </div>
           <div class="card-action-row" style="margin-top:10px;">
@@ -2306,7 +2380,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Render Joined Promises
     if (joinedPromises.length === 0) {
-      listContainer.innerHTML = `<p style="color: var(--text-dim); text-align:center; padding:40px 20px;">등록된 약속이 없습니다.</p>`;
+      listContainer.innerHTML = `<p style="color: var(--text-dim); text-align:center; padding:40px 20px;">예정된 약속이 없습니다.${doneCount > 0 ? `<br><span style="font-size:0.8rem;">완료된 약속 ${doneCount}건은 캘린더 탭에서 볼 수 있습니다.</span>` : ''}</p>`;
       return;
     }
 
@@ -2353,6 +2427,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="card-header-row">
           <h3 class="card-title">${escapeHtml(p.title)}</h3>
           <div class="card-header-right">
+            ${countdownBadgeHtml(p)}
             ${isHostOfThis ? `<button class="btn-delete-promise btn-delete-trigger" data-id="${escapeHtml(p.id)}" title="약속 삭제 (호스트 전용)">
               <i data-lucide="trash-2"></i>
             </button>` : ''}
@@ -2360,7 +2435,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
         <div class="card-info">
           <div class="card-info-item"><i data-lucide="map-pin"></i> <span class="ci-label">위치</span> <span class="ci-value">${locationDisplay}</span> <span class="ci-tail">${escapeHtml(distStr)}</span></div>
-          <div class="card-info-item"><i data-lucide="clock"></i> <span class="ci-label">시간</span> <span class="ci-value">${escapeHtml(p.dateTime)}</span></div>
+          <div class="card-info-item"><i data-lucide="clock"></i> <span class="ci-label">시간</span> <span class="ci-value">${escapeHtml(promiseTimeRangeLabel(p))}</span></div>
           <div class="card-info-item"><i data-lucide="${p.penaltyType === 'vibrate' ? 'vibrate' : 'bell-ring'}"></i> <span class="ci-label">지각 벌칙</span> <span class="ci-value">${escapeHtml(penaltyLabel(p))}</span></div>
           <div class="card-info-item"><i data-lucide="eye"></i> <span class="ci-label">위치 공개</span> <span class="ci-value">${escapeHtml(locationRevealLabel(p))}</span></div>
           <div style="margin-top:6px;">
@@ -2941,23 +3016,29 @@ document.addEventListener('DOMContentLoaded', () => {
   // ==========================================
   // 6. Create Promise Modal
   // ==========================================
+  const timeInput = document.getElementById('inputPromiseTime');
+  // 날짜/시간 피커는 브라우저 기본 동작에 맡긴다.
+  // (직접 showPicker()/blur() 를 호출하면 피커가 열린 뒤 스스로 닫히는 문제가 있었다)
+
   if (btnOpenCreatePromise) {
     btnOpenCreatePromise.addEventListener('click', () => {
       populateFriendSelector();
       createPromiseModal.classList.add('active');
 
-
-      const min10Time = new Date(Date.now() + 10 * 60 * 1000);
-      const min10Formatted = new Date(min10Time.getTime() - min10Time.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-      
-      const timeInput = document.getElementById('inputPromiseTime');
-      timeInput.min = min10Formatted;
-      timeInput.value = min10Formatted;
+      // 시작 시간 제한 없음: 기본값만 현재 시각으로 채워 둔다.
+      if (timeInput) {
+        timeInput.removeAttribute('min');
+        if (!timeInput.value) timeInput.value = toLocalInputValue(new Date());
+      }
     });
   }
 
-  if (btnCloseCreatePromise) btnCloseCreatePromise.addEventListener('click', () => createPromiseModal.classList.remove('active'));
-  if (btnCancelCreatePromise) btnCancelCreatePromise.addEventListener('click', () => createPromiseModal.classList.remove('active'));
+  const closeCreateModalHandler = () => {
+    if (document.activeElement) document.activeElement.blur();
+    if (createPromiseModal) createPromiseModal.classList.remove('active');
+  };
+  if (btnCloseCreatePromise) btnCloseCreatePromise.addEventListener('click', closeCreateModalHandler);
+  if (btnCancelCreatePromise) btnCancelCreatePromise.addEventListener('click', closeCreateModalHandler);
 
   // ==========================================
   // 참가 친구 선택 (별도 모달 + 검색 + 스크롤)
@@ -3131,6 +3212,74 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   updatePenaltyHint();
 
+  // ------------------------------------------
+  // 약속 시작/종료 시간 입력 연동
+  //  - 시작을 정하면 종료를 기본 +1시간으로 채운다.
+  //  - 진행 시간 칩(30분/1시간/…)을 누르면 종료 시간을 계산해 넣는다.
+  // ------------------------------------------
+  const inputPromiseStartEl = document.getElementById('inputPromiseTime');
+  const inputPromiseEndEl = document.getElementById('inputPromiseEndTime');
+  const durationChipsEl = document.getElementById('promiseDurationChips');
+  const DEFAULT_PROMISE_DURATION_MIN = 60;
+
+  function toLocalInputValue(date) {
+    const p2 = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${p2(date.getMonth() + 1)}-${p2(date.getDate())}T${p2(date.getHours())}:${p2(date.getMinutes())}`;
+  }
+
+  function selectedStartDate() {
+    const raw = inputPromiseStartEl ? inputPromiseStartEl.value : '';
+    const ts = new Date(raw).getTime();
+    return Number.isFinite(ts) ? new Date(ts) : null;
+  }
+
+  function markActiveDurationChip(minutes) {
+    if (!durationChipsEl) return;
+    durationChipsEl.querySelectorAll('.duration-chip').forEach((chip) => {
+      chip.classList.toggle('selected', Number(chip.getAttribute('data-min')) === minutes);
+    });
+  }
+
+  function applyPromiseDuration(minutes) {
+    const start = selectedStartDate();
+    if (!start) {
+      alert('먼저 약속 시작 시간을 선택해 주세요.');
+      if (inputPromiseStartEl) inputPromiseStartEl.focus();
+      return;
+    }
+    if (inputPromiseEndEl) inputPromiseEndEl.value = toLocalInputValue(new Date(start.getTime() + minutes * 60000));
+    markActiveDurationChip(minutes);
+  }
+
+  if (inputPromiseStartEl) {
+    inputPromiseStartEl.addEventListener('change', () => {
+      const start = selectedStartDate();
+      if (!start) return;
+      // 종료가 비었거나 시작보다 앞이면 기본 진행 시간으로 맞춘다.
+      const endTsNow = inputPromiseEndEl ? new Date(inputPromiseEndEl.value).getTime() : NaN;
+      if (!Number.isFinite(endTsNow) || endTsNow <= start.getTime()) {
+        applyPromiseDuration(DEFAULT_PROMISE_DURATION_MIN);
+      } else {
+        markActiveDurationChip(Math.round((endTsNow - start.getTime()) / 60000));
+      }
+    });
+  }
+
+  if (inputPromiseEndEl) {
+    inputPromiseEndEl.addEventListener('change', () => {
+      const start = selectedStartDate();
+      const endTsNow = new Date(inputPromiseEndEl.value).getTime();
+      if (!start || !Number.isFinite(endTsNow)) return;
+      markActiveDurationChip(Math.round((endTsNow - start.getTime()) / 60000));
+    });
+  }
+
+  if (durationChipsEl) {
+    durationChipsEl.querySelectorAll('.duration-chip').forEach((chip) => {
+      chip.addEventListener('click', () => applyPromiseDuration(Number(chip.getAttribute('data-min')) || DEFAULT_PROMISE_DURATION_MIN));
+    });
+  }
+
   if (formCreatePromise) {
     formCreatePromise.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -3138,7 +3287,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const location = document.getElementById('inputPromiseLocation').value.trim();
       const venueName = document.getElementById('inputPromiseVenueName').value.trim();
       const dateTimeVal = document.getElementById('inputPromiseTime').value;
-      const leaveRule = document.getElementById('selectLeaveRule').value;
+      const endTimeEl = document.getElementById('inputPromiseEndTime');
+      const endTimeVal = endTimeEl ? endTimeEl.value : '';
+      const leaveRule = 'consent';   // 약속 나가기는 항상 '동의 필요'
       const revealEl = document.getElementById('selectLocationReveal');
       const locationRevealMin = revealEl ? (parseInt(revealEl.value, 10) || 0) : 0;
       const penaltySelectEl = document.getElementById('selectPenaltyType');
@@ -3158,13 +3309,28 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      // STRICT 10-MINUTE FUTURE CONSTRAINT VALIDATION
       const selectedTs = new Date(dateTimeVal).getTime();
-      const currentTs = Date.now();
-      
-      if (selectedTs < currentTs + 10 * 60 * 1000 - 5000) {
-        alert('⚠️ 약속 시간은 현재 시간으로부터 최소 10분 이후부터 설정해 주세요! (10분 미만 시각은 생성할 수 없습니다)');
+      if (!Number.isFinite(selectedTs)) {
+        alert('⏱️ 약속 시작 시간을 입력해 주세요.');
         document.getElementById('inputPromiseTime').focus();
+        return;
+      }
+
+      // 종료 시간 검증: 시작보다 뒤여야 하고 최대 24시간까지 허용
+      const endTs = new Date(endTimeVal).getTime();
+      if (!endTimeVal || !Number.isFinite(endTs)) {
+        alert('⏱️ 약속 종료 시간을 입력해 주세요.');
+        if (endTimeEl) endTimeEl.focus();
+        return;
+      }
+      if (endTs <= selectedTs) {
+        alert('⏱️ 종료 시간은 시작 시간보다 뒤여야 합니다.');
+        if (endTimeEl) endTimeEl.focus();
+        return;
+      }
+      if (endTs - selectedTs > 24 * 60 * 60 * 1000) {
+        alert('⏱️ 약속 진행 시간은 최대 24시간까지 설정할 수 있습니다.');
+        if (endTimeEl) endTimeEl.focus();
         return;
       }
 
@@ -3180,7 +3346,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const dateObj = new Date(dateTimeVal);
       const targetTs = dateObj.getTime();
-      const dateStr = `${dateObj.getMonth() + 1}/${dateObj.getDate()} ${String(dateObj.getHours()).padStart(2,'0')}:${String(dateObj.getMinutes()).padStart(2,'0')}`;
+      const endObj = new Date(endTs);
+      const formatAmPm = (d) => {
+        let h = d.getHours();
+        const m = String(d.getMinutes()).padStart(2, '0');
+        const ap = h >= 12 ? 'PM' : 'AM';
+        h = h % 12 || 12;
+        return `${ap} ${String(h).padStart(2, '0')}:${m}`;
+      };
+      const dateStr = `${dateObj.getMonth() + 1}/${dateObj.getDate()} ${formatAmPm(dateObj)}`;
+      const sameDay = endObj.getFullYear() === dateObj.getFullYear()
+        && endObj.getMonth() === dateObj.getMonth()
+        && endObj.getDate() === dateObj.getDate();
+      const endDateTimeStr = sameDay ? formatAmPm(endObj) : `${endObj.getMonth() + 1}/${endObj.getDate()} ${formatAmPm(endObj)}`;
+      const durationMin = Math.round((endTs - targetTs) / 60000);
 
       // 지도에서 직접 찍은 좌표가 최우선. 없으면 아래 지오코딩 결과로 채운다.
       // (내 현재 위치를 약속 장소로 오인하지 않도록 임의 대입하지 않는다)
@@ -3193,7 +3372,10 @@ document.addEventListener('DOMContentLoaded', () => {
         location: location,
         venueName: venueName,
         targetTimestamp: targetTs,
+        endTimestamp: endTs,
+        durationMin: durationMin,
         dateTime: dateStr,
+        endDateTime: endDateTimeStr,
         leaveRule: leaveRule,
         locationRevealMin: locationRevealMin,
         penaltyType: penaltyType,
@@ -3229,8 +3411,10 @@ document.addEventListener('DOMContentLoaded', () => {
       promisesList.unshift(newPromise);
       syncPromisesToCloud(newPromise);
       document.getElementById('inputPromiseTitle').value = '';
-      document.getElementById('inputPromiseLocation').value = '';
+      setPromiseLocationValue('');
       document.getElementById('inputPromiseVenueName').value = '';
+      if (inputPromiseEndEl) inputPromiseEndEl.value = '';
+      markActiveDurationChip(-1);
       selectedInviteCodes = [];
       populateFriendSelector();
       createPromiseModal.classList.remove('active');
@@ -3292,6 +3476,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const now = Date.now();
     if (now < target) return false;
+
+    // 종료 시간이 지난(완료된) 약속은 더 이상 울리지 않는다.
+    const endTs = promiseEndTs(p);
+    if (Number.isFinite(endTs) && now >= endTs) return false;
 
     // 지속 시간: 0 이면 "도착할 때까지" (최대 6시간 안전장치)
     const durationMin = Number(p.penaltyDurationMin) || 0;
@@ -3448,6 +3636,410 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // ==========================================
+  // 9. 남은 시간 카운트다운 + 사전 알림 (1시간/30분/10분/5분/1분 전)
+  //    - 카드 제목 오른쪽 배지에 남은 시간을 표시하고 1초마다 갱신한다.
+  //    - 임계 시점마다 알림(브라우저 알림 + 인앱 토스트 + 짧은 소리/진동)을 1회씩 보낸다.
+  // ==========================================
+  const REMINDER_STEPS = [60, 30, 10, 5, 1];   // 분 단위 (내림차순)
+  const REMINDER_WINDOW_MS = 3 * 60 * 1000;    // 임계 시점을 이 시간보다 늦게 발견하면 조용히 소진 처리
+  const REMINDER_KEEP_MS = 6 * 60 * 60 * 1000; // 정각 후 6시간이 지난 기록은 정리
+
+  let reminderFiredMap = loadStorage('pa_reminder_fired', {});
+  let completedNotified = loadStorage('pa_completed_promises', []);
+  let notificationAsked = false;
+  let toastStackEl = null;
+
+  // ------------------------------------------
+  // 약속 진행 상태 (종료 시간 기준)
+  //  upcoming : 아직 끝나지 않음
+  //  done     : 종료 시간이 지남 → 완료 (캘린더 기록)
+  // ------------------------------------------
+  const LEGACY_DURATION_MIN = 60;   // 종료 시간이 없던 예전 약속의 기본 진행 시간
+
+  function promiseStartTs(promiseObj) {
+    const ts = Number(promiseObj && promiseObj.targetTimestamp);
+    return Number.isFinite(ts) ? ts : NaN;
+  }
+
+  function promiseEndTs(promiseObj) {
+    const start = promiseStartTs(promiseObj);
+    if (!Number.isFinite(start)) return NaN;
+    const end = Number(promiseObj && promiseObj.endTimestamp);
+    if (Number.isFinite(end) && end > start) return end;
+    const dur = Number(promiseObj && promiseObj.durationMin);
+    return start + (Number.isFinite(dur) && dur > 0 ? dur : LEGACY_DURATION_MIN) * 60000;
+  }
+
+  function promiseStatus(promiseObj) {
+    const start = promiseStartTs(promiseObj);
+    if (!Number.isFinite(start)) return 'upcoming';
+    // 종료 시간이 지나면 완료, 그 전은 모두 예정으로 본다.
+    return Date.now() >= promiseEndTs(promiseObj) ? 'done' : 'upcoming';
+  }
+
+  function isPromiseDone(promiseObj) {
+    return promiseStatus(promiseObj) === 'done';
+  }
+
+  function formatAmPmDate(d) {
+    if (!d) return '';
+    const obj = typeof d === 'number' ? new Date(d) : (d instanceof Date ? d : new Date(d));
+    if (isNaN(obj.getTime())) return '';
+    let h = obj.getHours();
+    const m = String(obj.getMinutes()).padStart(2, '0');
+    const ap = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${ap} ${String(h).padStart(2, '0')}:${m}`;
+  }
+
+  function convert24hStringToAmPm(str) {
+    if (!str) return '';
+    if (/AM|PM|오전|오후/i.test(str)) return str;
+    return str.replace(/\b([0-1]?[0-9]|2[0-3]):([0-5][0-9])\b/g, (match, hStr, mStr) => {
+      let h = parseInt(hStr, 10);
+      const ap = h >= 12 ? 'PM' : 'AM';
+      h = h % 12 || 12;
+      return `${ap} ${String(h).padStart(2, '0')}:${mStr}`;
+    });
+  }
+
+  // "7/28 PM 07:00 ~ PM 09:00" 형태의 표시 문자열
+  function promiseTimeRangeLabel(promiseObj) {
+    if (!promiseObj) return '';
+    const ts = Number(promiseObj.targetTimestamp);
+    const end = promiseEndTs(promiseObj);
+
+    if (Number.isFinite(ts)) {
+      const startObj = new Date(ts);
+      const datePart = `${startObj.getMonth() + 1}/${startObj.getDate()}`;
+      const startStr = `${datePart} ${formatAmPmDate(startObj)}`;
+
+      if (Number.isFinite(end)) {
+        const endObj = new Date(end);
+        const sameDay = endObj.getFullYear() === startObj.getFullYear()
+          && endObj.getMonth() === startObj.getMonth()
+          && endObj.getDate() === startObj.getDate();
+        const endStr = sameDay ? formatAmPmDate(endObj) : `${endObj.getMonth() + 1}/${endObj.getDate()} ${formatAmPmDate(endObj)}`;
+        return `${startStr} ~ ${endStr}`;
+      }
+      return startStr;
+    }
+
+    const startLabel = promiseObj.dateTime ? convert24hStringToAmPm(promiseObj.dateTime) : '';
+    let endLabel = promiseObj.endDateTime ? convert24hStringToAmPm(promiseObj.endDateTime) : '';
+    return endLabel ? `${startLabel} ~ ${endLabel}` : startLabel;
+  }
+
+  // 남은 시간 → 표시 문자열 + 색상 등급
+  function getCountdownInfo(promiseObj) {
+    const ts = Number(promiseObj && promiseObj.targetTimestamp);
+    if (!Number.isFinite(ts)) return null;
+
+    const diff = ts - Date.now();
+    const pad2 = (n) => String(n).padStart(2, '0');
+
+    if (diff <= 0) {
+      // 종료 시간이 지났으면 완료
+      if (isPromiseDone(promiseObj)) return { tier: 'done', main: '완료', suffix: '' };
+
+      // 약속 시간이 지난 뒤: 도착했으면 '도착', 아직이면 지각 경과 시간
+      if (arrivedNotified.includes(promiseObj.id)) return { tier: 'done', main: '도착', suffix: '' };
+
+      const lateMin = Math.floor(-diff / 60000);
+      if (lateMin <= 0) return { tier: 'now', main: '지금', suffix: '시작' };
+      if (lateMin >= 60) return { tier: 'late', main: `${Math.floor(lateMin / 60)}시간 ${lateMin % 60}분`, suffix: '지남' };
+      return { tier: 'late', main: `${lateMin}분`, suffix: '지남' };
+    }
+
+    // 남은 시간은 올림 처리한다. (5시간 약속이 4시간 59분으로 보이지 않도록)
+    const totalSec = Math.ceil(diff / 1000);
+    const minCeil = Math.ceil(totalSec / 60);
+
+    if (totalSec < 60) return { tier: 'now', main: `${totalSec}초`, suffix: '남음' };
+    if (totalSec < 600) {
+      const m = Math.floor(totalSec / 60);
+      return { tier: m < 5 ? 'm5' : 'm10', main: `${m}:${pad2(totalSec % 60)}`, suffix: '남음' };
+    }
+    if (minCeil <= 30) return { tier: 'm30', main: `${minCeil}분`, suffix: '남음' };
+    if (minCeil <= 60) return { tier: 'h1', main: `${minCeil}분`, suffix: '남음' };
+
+    const hour = Math.floor(minCeil / 60);
+    if (hour < 24) return { tier: 'today', main: hour + '시간' + (minCeil % 60 ? ` ${minCeil % 60}분` : ''), suffix: '남음' };
+
+    const day = Math.floor(hour / 24);
+    return { tier: 'far', main: day + '일' + (hour % 24 ? ` ${hour % 24}시간` : ''), suffix: '남음' };
+  }
+
+  function countdownBadgeHtml(promiseObj) {
+    const info = getCountdownInfo(promiseObj);
+    if (!info) return '';
+    return `<span class="countdown-badge cd-${info.tier}" role="timer" aria-live="off"
+      data-cd-id="${escapeHtml(promiseObj.id)}"
+      aria-label="약속까지 ${escapeHtml(info.main)} ${escapeHtml(info.suffix)}">
+      <span class="cd-dot" aria-hidden="true"></span>
+      <span class="cd-main">${escapeHtml(info.main)}</span>
+      <span class="cd-suffix">${escapeHtml(info.suffix)}</span>
+    </span>`;
+  }
+
+  // 전체 재렌더 없이 배지 텍스트/색상만 1초마다 갱신
+  function tickCountdownBadges() {
+    const badges = document.querySelectorAll('.countdown-badge[data-cd-id]');
+    if (!badges.length) return;
+
+    badges.forEach((el) => {
+      const target = promisesList.find(p => p.id === el.getAttribute('data-cd-id'));
+      const info = target ? getCountdownInfo(target) : null;
+      if (!info) return;
+
+      const mainEl = el.querySelector('.cd-main');
+      const suffixEl = el.querySelector('.cd-suffix');
+      if (mainEl && mainEl.textContent !== info.main) mainEl.textContent = info.main;
+      if (suffixEl && suffixEl.textContent !== info.suffix) suffixEl.textContent = info.suffix;
+
+      const cls = `countdown-badge cd-${info.tier}`;
+      if (el.className !== cls) el.className = cls;
+      el.setAttribute('aria-label', `약속까지 ${info.main} ${info.suffix}`);
+    });
+  }
+
+  // ---------- 알림 채널 ----------
+  function ensureNotificationPermission() {
+    if (notificationAsked) return;
+    if (!('Notification' in window)) { notificationAsked = true; return; }
+    if (Notification.permission !== 'default') { notificationAsked = true; return; }
+    notificationAsked = true;
+    try {
+      const res = Notification.requestPermission();
+      if (res && typeof res.catch === 'function') res.catch(() => {});
+    } catch (e) {}
+  }
+
+  function showSystemNotification(title, body, tag) {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return false;
+    const options = {
+      body: body,
+      tag: tag,
+      renotify: true,
+      icon: 'images/icon-192.png',
+      badge: 'images/icon-192.png',
+      vibrate: [200, 100, 200]
+    };
+    try {
+      // 모바일(특히 안드로이드)에서는 서비스워커 알림이 더 안정적이다.
+      if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+        navigator.serviceWorker.ready
+          .then((reg) => reg.showNotification(title, options))
+          .catch(() => { try { new Notification(title, options); } catch (e) {} });
+        return true;
+      }
+      new Notification(title, options);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function showReminderToast(headline, detail, tier) {
+    if (!toastStackEl) {
+      toastStackEl = document.createElement('div');
+      toastStackEl.className = 'toast-stack';
+      toastStackEl.setAttribute('aria-live', 'polite');
+      document.body.appendChild(toastStackEl);
+    }
+
+    const toast = document.createElement('div');
+    toast.className = `toast-item cd-${tier || 'today'}`;
+    toast.setAttribute('role', 'status');
+    toast.innerHTML = `
+      <span class="toast-icon" aria-hidden="true">⏰</span>
+      <div class="toast-text">
+        <strong>${escapeHtml(headline)}</strong>
+        <span>${escapeHtml(detail)}</span>
+      </div>
+      <button type="button" class="toast-close" aria-label="알림 닫기">×</button>
+    `;
+
+    const remove = () => {
+      toast.classList.add('is-out');
+      setTimeout(() => toast.remove(), 260);
+    };
+    toast.querySelector('.toast-close').addEventListener('click', remove);
+    toastStackEl.appendChild(toast);
+    setTimeout(remove, 8000);
+  }
+
+  // 사전 알림용 짧은 차임 (지각 벌칙 알람과 구분되는 2음)
+  function playReminderChime() {
+    if (!penaltyAudioCtx || penaltyAudioCtx.state !== 'running') return;
+    const ctx = penaltyAudioCtx;
+    const now = ctx.currentTime;
+    [[880, 0], [1174, 0.16]].forEach(([freq, offset]) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + offset);
+      gain.gain.setValueAtTime(0.0001, now + offset);
+      gain.gain.exponentialRampToValueAtTime(0.2, now + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.3);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + offset);
+      osc.stop(now + offset + 0.32);
+    });
+  }
+
+  function reminderStepLabel(minutes) {
+    return minutes >= 60 ? `${Math.floor(minutes / 60)}시간` : `${minutes}분`;
+  }
+
+  function fireReminder(promiseObj, minutes) {
+    const tier = minutes <= 1 ? 'now' : minutes <= 5 ? 'm5' : minutes <= 10 ? 'm10' : minutes <= 30 ? 'm30' : 'h1';
+    const headline = `${reminderStepLabel(minutes)} 후 약속 - ${promiseObj.title}`;
+    const place = promiseObj.venueName || promiseObj.location || '';
+    const detail = `${promiseObj.dateTime || ''}${place ? ` · ${place}` : ''}`.trim() || '지금 출발할 시간이에요.';
+
+    showReminderToast(headline, detail, tier);
+    showSystemNotification(`⏰ ${headline}`, detail, `promise-${promiseObj.id}-${minutes}`);
+    playReminderChime();
+    if (navigator.vibrate) { try { navigator.vibrate([200, 100, 200]); } catch (e) {} }
+  }
+
+  function checkPromiseReminders() {
+    const now = Date.now();
+    let changed = false;
+
+    promisesList.forEach((p) => {
+      if (!p || !p.id) return;
+      if (!amIAttendeeOf(p)) return;
+
+      const ts = Number(p.targetTimestamp);
+      if (!Number.isFinite(ts)) return;
+
+      const fired = Array.isArray(reminderFiredMap[p.id]) ? reminderFiredMap[p.id] : [];
+      const diff = ts - now;
+
+      REMINDER_STEPS.forEach((minutes) => {
+        if (fired.includes(minutes)) return;
+
+        const stepAt = ts - minutes * 60 * 1000;
+        if (now < stepAt) return;          // 아직 시점 전
+        if (diff <= 0) { fired.push(minutes); changed = true; return; }  // 이미 정각 지남 → 조용히 소진
+
+        fired.push(minutes);
+        changed = true;
+
+        // 앱을 늦게 켠 경우(임계 시점을 한참 지나 발견) 지난 알림은 울리지 않는다.
+        if (now - stepAt <= REMINDER_WINDOW_MS) fireReminder(p, minutes);
+      });
+
+      if (fired.length) reminderFiredMap[p.id] = fired;
+    });
+
+    // 오래된 기록 정리
+    Object.keys(reminderFiredMap).forEach((id) => {
+      const found = promisesList.find(p => p.id === id);
+      const ts = found ? Number(found.targetTimestamp) : NaN;
+      if (!found || (Number.isFinite(ts) && now > ts + REMINDER_KEEP_MS)) {
+        delete reminderFiredMap[id];
+        changed = true;
+      }
+    });
+
+    if (changed) saveStorage('pa_reminder_fired', reminderFiredMap);
+  }
+
+  // 약속이 끝났을 때 "완료" 요약 카드를 톡 튀어나오게 보여주고 2초 뒤 사라진다.
+  function showPromiseCompleteCard(promiseObj) {
+    const existing = document.getElementById('promiseCompleteOverlay');
+    if (existing) existing.remove();
+
+    const names = promiseParticipantNames(promiseObj);
+    const place = promiseObj.venueName
+      ? `${promiseObj.venueName}${promiseObj.location ? ` (${promiseObj.location})` : ''}`
+      : (promiseObj.location || '장소 미정');
+
+    const overlay = document.createElement('div');
+    overlay.id = 'promiseCompleteOverlay';
+    overlay.className = 'complete-overlay';
+    overlay.setAttribute('role', 'status');
+    overlay.setAttribute('aria-live', 'polite');
+    overlay.innerHTML = `
+      <div class="complete-card">
+        <div class="complete-check" aria-hidden="true">
+          <i data-lucide="check"></i>
+        </div>
+        <strong class="complete-title">완료</strong>
+        <span class="complete-subtitle">오늘의 약속</span>
+        <div class="complete-info">
+          <div class="complete-row"><span class="complete-key">약속</span><span class="complete-val">${escapeHtml(promiseObj.title || '약속')}</span></div>
+          <div class="complete-row"><span class="complete-key">시간</span><span class="complete-val">${escapeHtml(promiseTimeRangeLabel(promiseObj))}</span></div>
+          <div class="complete-row"><span class="complete-key">장소</span><span class="complete-val">${escapeHtml(place)}</span></div>
+          <div class="complete-row"><span class="complete-key">인원</span><span class="complete-val">${names.length}명${names.length ? ` · ${escapeHtml(names.join(', '))}` : ''}</span></div>
+        </div>
+        <p class="complete-wish">좋은 만남이였길 바래요!</p>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    if (window.lucide) window.lucide.createIcons();
+
+    const close = () => {
+      overlay.classList.add('is-out');
+      setTimeout(() => overlay.remove(), 420);
+    };
+    overlay.addEventListener('click', close);
+    setTimeout(close, 2600);   // 팝업 애니메이션 후 약 2초 유지
+  }
+
+  // 종료 시간이 지난 약속을 완료 처리하고 캘린더 기록으로 넘긴다.
+  function checkPromiseCompletion() {
+    const now = Date.now();
+    let changed = false;
+    let needRender = false;
+
+    promisesList.forEach((p) => {
+      if (!p || !p.id) return;
+      if (!amIAttendeeOf(p)) return;
+      if (completedNotified.includes(p.id)) return;
+
+      const end = promiseEndTs(p);
+      if (!Number.isFinite(end) || now < end) return;
+
+      completedNotified.push(p.id);
+      changed = true;
+      needRender = true;
+
+      // 완료 상태를 내 참석 노드에 기록 (약속 본문은 호스트 전용)
+      writeMyAttendance(p, { completed: true, completedAt: now });
+
+      // 방금 끝난 약속만 알린다. (예전 약속을 열었을 때 몰아서 알리지 않도록)
+      if (now - end <= REMINDER_WINDOW_MS) {
+        const lateNames = latePenaltyNames(p);
+        const detail = lateNames.length > 0
+          ? `지각: ${lateNames.join(', ')} · 캘린더에 기록했습니다.`
+          : '정시 완료로 캘린더에 기록했습니다.';
+        showPromiseCompleteCard(p);
+        showSystemNotification(`✅ 약속 완료 - ${p.title}`, detail, `promise-done-${p.id}`);
+      }
+    });
+
+    if (changed) {
+      if (completedNotified.length > 300) completedNotified = completedNotified.slice(-300);
+      saveStorage('pa_completed_promises', completedNotified);
+    }
+    if (needRender) {
+      renderPromises();
+      renderCalendar();
+    }
+  }
+
+  function tickPromiseTimers() {
+    tickCountdownBadges();
+    checkPromiseReminders();
+    checkPromiseCompletion();
+  }
+
   // 첫 사용자 조작에서 오디오 잠금 해제 (알람 벌칙 대비)
   ['pointerdown', 'touchstart', 'keydown'].forEach((evt) => {
     document.addEventListener(evt, () => {
@@ -3455,10 +4047,18 @@ document.addEventListener('DOMContentLoaded', () => {
         unlockPenaltyAudio();
         if (penaltyActiveId && penaltyActiveType === 'alarm' && !penaltyBeepTimer) startPenaltyAlarm();
       }
+      // 알림 권한도 사용자 조작 시점에 요청해야 iOS/Safari 에서 허용된다.
+      ensureNotificationPermission();
     }, { once: false, passive: true });
   });
 
   setInterval(evaluatePenaltyState, 5000);
+  setInterval(tickPromiseTimers, 1000);
+
+  // 백그라운드에서 돌아오면 즉시 동기화 (모바일은 타이머가 멈춘다)
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) tickPromiseTimers();
+  });
 
   // Initialize App
   initInstantGpsTracking();
@@ -3466,4 +4066,5 @@ document.addEventListener('DOMContentLoaded', () => {
   checkOnboarding();
   renderAll();
   evaluatePenaltyState();
+  tickPromiseTimers();
 });

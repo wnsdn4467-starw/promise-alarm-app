@@ -1,5 +1,5 @@
 /* Service Worker for Promise App PWA Installation & Offline Support */
-const CACHE_VERSION = 'v59';
+const CACHE_VERSION = 'v70';
 const CACHE_NAME = `promise-app-${CACHE_VERSION}`;
 
 // 쿼리스트링(?v=) 없이 등록하고, 조회 시 ignoreSearch 로 매칭한다.
@@ -7,6 +7,7 @@ const ASSETS = [
   './',
   './index.html',
   './css/style.css',
+  './css/enhance.css',
   './js/app.js',
   './js/gps.js',
   './manifest.json',
@@ -36,8 +37,20 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-self.addEventListener('fetch', (e) => {
-  const req = e.request;
+// 약속 사전 알림(1시간/30분/10분/5분/1분 전)을 탭하면 앱으로 복귀시킨다.
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if ('focus' in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow('./index.html');
+    })
+  );
+});
+
+self.addEventListener('fetch', (e) => {  const req = e.request;
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);

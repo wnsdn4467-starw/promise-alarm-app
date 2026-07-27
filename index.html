@@ -35,7 +35,8 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <link rel="stylesheet" href="css/style.css?v=59">
+  <link rel="stylesheet" href="css/style.css?v=70">
+  <link rel="stylesheet" href="css/enhance.css?v=70">
 
   <!-- Official Google Identity Services & Apple ID Auth SDKs -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -77,7 +78,7 @@
       </button>
       <button class="tab-btn" data-tab="tabHistory">
         <i data-lucide="calendar-days"></i>
-        <span>약속 기록</span>
+        <span>캘린더</span>
       </button>
     </nav>
 
@@ -138,7 +139,7 @@
         </div>
       </section>
 
-      <!-- TAB 3: PROMISE HISTORY CALENDAR -->
+      <!-- TAB 3: CALENDAR (약속 기록) -->
       <section id="tabHistory" class="tab-page">
         <div class="calendar-head">
           <button type="button" class="cal-nav" id="btnCalPrev" aria-label="이전 달">
@@ -159,6 +160,7 @@
           </div>
         </div>
 
+        <p id="calTodayLabel" class="cal-today-label">오늘</p>
         <p id="calMonthSummary" class="cal-summary">이번 달 약속 0건</p>
         <div id="calLegend" class="cal-legend"></div>
       </section>
@@ -434,14 +436,14 @@
         </div>
 
         <div class="input-group">
-          <label>약속 장소 (지도에서 직접 선택)</label>
+          <label>약속 장소</label>
           <div class="gps-location-row">
-            <input type="text" id="inputPromiseLocation" placeholder="지도 선택으로 장소를 찍어주세요" required readonly>
             <button type="button" class="btn-gps-fetch" id="btnOpenMapPicker">
               <i data-lucide="map"></i> 지도 선택
             </button>
+            <span id="promiseLocationText" class="picked-location-text"></span>
+            <input type="hidden" id="inputPromiseLocation">
           </div>
-          <span style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">지도에서 좌표를 찍지 않으면 약속을 만들 수 없습니다.</span>
         </div>
 
         <div class="input-group">
@@ -456,8 +458,19 @@
         </div>
 
         <div class="input-group">
-          <label>약속 시간</label>
+          <label>약속 시작 시간</label>
           <input type="datetime-local" id="inputPromiseTime" required>
+
+          <label style="margin-top:8px;">약속 종료 시간</label>
+          <input type="datetime-local" id="inputPromiseEndTime" required>
+          <div class="duration-chips" id="promiseDurationChips" role="group" aria-label="약속 진행 시간 빠른 선택">
+            <button type="button" class="duration-chip" data-min="30">30분</button>
+            <button type="button" class="duration-chip" data-min="60">1시간</button>
+            <button type="button" class="duration-chip" data-min="120">2시간</button>
+            <button type="button" class="duration-chip" data-min="180">3시간</button>
+            <button type="button" class="duration-chip" data-min="300">5시간</button>
+          </div>
+          <span style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">종료 시간이 지나면 약속이 자동으로 완료 처리되고 캘린더에 기록됩니다.</span>
         </div>
 
         <div class="input-group">
@@ -473,14 +486,6 @@
             <option value="4320">약속 3일 전부터</option>
           </select>
           <span style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">공개 시점 전에는 약속 장소만 보이고 참가자 위치·거리·GPS 상태는 숨겨집니다.</span>
-        </div>
-
-        <div class="input-group">
-          <label>약속 나가기 옵션</label>
-          <select id="selectLeaveRule" class="status-select" style="padding:10px; font-size:0.85rem;">
-            <option value="consent" selected>동의 필요 (기본)</option>
-            <option value="free">자유 나가기</option>
-          </select>
         </div>
 
         <div class="input-group">
@@ -706,7 +711,7 @@
   </div>
 
   <script src="js/gps.js?v=42"></script>
-  <script src="js/app.js?v=59"></script>
+  <script src="js/app.js?v=70"></script>
 
   <script>
     // PWA Service Worker Registration & Installation Prompt Handler
