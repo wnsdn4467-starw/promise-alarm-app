@@ -2,6 +2,10 @@
   "database": {
     "rules": "database.rules.json"
   },
+  "functions": {
+    "source": "functions",
+    "predeploy": []
+  },
   "hosting": {
     "public": ".",
     "headers": [
@@ -36,6 +40,7 @@
       "ps_server.ps1",
       "*.bat",
       "native/**",
+      "functions/**",
       "css/style.original.css"
     ]
   }

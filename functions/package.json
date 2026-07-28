@@ -1,0 +1,13 @@
+{
+  "name": "promise-alarm-functions",
+  "description": "기프티콘 실시간 조회 + 원본 이미지 보호 함수",
+  "private": true,
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "12.7.0",
+    "firebase-functions": "5.1.1"
+  }
+}

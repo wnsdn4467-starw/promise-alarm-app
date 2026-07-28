@@ -3524,7 +3524,7 @@ document.addEventListener('DOMContentLoaded', () => {
         members: buildMembersMap(myUidForPromise, invitedFriendObjs),
         // 기프티콘 벌칙: 각자 자기 uid 노드에만 자기 기프티콘을 올린다.
         gifticons: (penaltyType === 'gifticon' && myUidForPromise && pendingGifticon)
-          ? { [myUidForPromise]: pendingGifticon }
+          ? { [myUidForPromise]: publicGifticonRecord(pendingGifticon) }
           : {},
         createdAt: Date.now()
       };
@@ -3538,6 +3538,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
       promisesList.unshift(newPromise);
       syncPromisesToCloud(newPromise);
+
+      // 기프티콘 원본은 서버 전용 경로에 보관하고, 실시간 PIN 조회도 이 시점에 실행한다.
+      if (penaltyType === 'gifticon' && pendingGifticon) {
+        const localRec = pendingGifticon;
+        newPromise.gifticons = newPromise.gifticons || {};
+        if (myUidForPromise) newPromise.gifticons[myUidForPromise] = localRec;
+        if (localRec.imageFull) {
+          callFunction('submitGifticonOriginal', { promiseId: newPromise.id, imageFull: localRec.imageFull })
+            .catch((e) => console.warn('[기프티콘] 원본 보관 실패:', e && e.message ? e.message : e));
+        }
+      }
       document.getElementById('inputPromiseTitle').value = '';
       setPromiseLocationValue('');
       document.getElementById('inputPromiseVenueName').value = '';
@@ -3652,11 +3663,49 @@ document.addEventListener('DOMContentLoaded', () => {
   const GIFTICON_JPEG_Q = 0.72;
   const GIFTICON_MAX_PEOPLE = 10;          // 약속 참가 인원 상한
   const GEMINI_MODEL = 'gemini-2.0-flash';
+  const FUNCTIONS_BASE = `https://${'asia-southeast1'}-${FIREBASE_CONFIG.projectId}.cloudfunctions.net`;
+
+  // Cloud Functions(onCall) 를 REST 로 호출한다. (functions SDK 미탑재)
+  async function callFunction(name, payload) {
+    const user = firebase.auth && firebase.auth().currentUser;
+    if (!user) throw new Error('로그인이 필요합니다.');
+    const token = await user.getIdToken();
+    const res = await fetch(`${FUNCTIONS_BASE}/${name}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ data: payload || {} }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = (json && json.error && json.error.message) || `함수 호출 실패 (${res.status})`;
+      throw new Error(msg);
+    }
+    return json.result;
+  }
+
+  // 등록 대상 약속 id (약속 만들기 중이면 아직 없다)
+  function ctxPromiseIdForCheck() {
+    return (gifticonUploadContext && gifticonUploadContext.promiseId) || '';
+  }
+
+  // 2단계: 브랜드 + PIN 실시간 조회 (서버 함수 경유)
+  async function lookupGifticonPin(promiseId, brand, pin) {
+    if (!promiseId) {
+      return { status: 'unknown', provider: 'none', message: '약속 생성 후 등록하면 실시간 조회가 실행됩니다.' };
+    }
+    try {
+      const out = await callFunction('verifyGifticon', { promiseId, brand: brand || '', pin: pin || '' });
+      return out || { status: 'unknown', provider: 'none' };
+    } catch (e) {
+      return { status: 'unknown', provider: 'none', message: e && e.message ? e.message : String(e) };
+    }
+  }
 
   let pendingGifticon = null;              // 약속 만들기에서 등록한(아직 저장 전) 기프티콘
   let gifticonUploadContext = null;        // { mode: 'create' | 'promise', promiseId }
   let gifticonWorking = null;              // 현재 모달에서 다루는 검증 결과
   let gifticonRevealNotified = loadStorage('pa_gifticon_reveal_notified', []);
+  const gifticonRevealPending = [];        // 공개 요청이 진행 중인 약속 id
 
   function geminiApiKey(askIfMissing) {
     let key = '';
@@ -3770,8 +3819,11 @@ document.addEventListener('DOMContentLoaded', () => {
       '이 이미지가 실제 사용 가능한 모바일 상품권(기프티콘) 캡처인지 판정해라.',
       '판정 기준: 브랜드/상품명, 유효기간, 교환용 바코드 또는 QR 코드가 함께 보이면 기프티콘이다.',
       '단순 상품 사진, 스크린샷이 아닌 합성/그림, 코드가 없는 이미지는 기프티콘이 아니다.',
+      '"사용완료", "사용됨", "USED", "교환완료", "기간만료" 같은 도장/워터마크/문구가 보이면 used=true 로 판정해라.',
+      '유효기간이 오늘보다 과거면 expired=true 로 판정해라. 오늘 날짜는 ' + new Date().toISOString().slice(0, 10) + ' 이다.',
+      '교환번호(PIN, 바코드 아래 숫자)를 읽을 수 있으면 숫자/영문만 남겨 pin 에 넣어라. 못 읽으면 빈 문자열.',
       '바코드/QR 코드 영역의 위치를 이미지 크기에 대한 0~1 비율로 알려줘라.',
-      'JSON 만 출력: {"isGifticon":true/false,"confidence":0~1,"brand":"","item":"","expiry":"","codeType":"barcode|qr|none","codeBox":{"x":0,"y":0,"w":0,"h":0},"reason":""}',
+      'JSON 만 출력: {"isGifticon":true/false,"used":true/false,"expired":true/false,"confidence":0~1,"brand":"","item":"","expiry":"","pin":"","codeType":"barcode|qr|none","codeBox":{"x":0,"y":0,"w":0,"h":0},"reason":""}',
     ].join('\n');
 
     const body = {
@@ -3888,16 +3940,51 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
+      // 1차 시각 판정: 사용완료 도장 / 유효기간 만료
+      if (ai && (ai.used === true || ai.expired === true)) {
+        setGifticonVerifyBox(
+          ai.used === true ? '❌ 이미 사용된 기프티콘입니다' : '❌ 유효기간이 지난 기프티콘입니다',
+          `${ai.reason || ''}${ai.expiry ? ` (유효기간 ${ai.expiry})` : ''} 사용 가능한 기프티콘을 올려 주세요.`.trim(),
+          'is-bad'
+        );
+        return;
+      }
+
+      // 2차 실시간 조회: 브랜드 + PIN 으로 실제 사용 상태를 확인
+      let pinCheck = null;
+      if (ai && ai.pin) {
+        setGifticonVerifyBox('🔎 실시간 사용 여부 조회 중...', `${ai.brand || ''} 교환번호로 실제 사용 상태를 확인합니다.`, 'is-warn');
+        pinCheck = await lookupGifticonPin(ctxPromiseIdForCheck(), ai.brand, ai.pin);
+        if (pinCheck && (pinCheck.status === 'used' || pinCheck.status === 'expired')) {
+          setGifticonVerifyBox(
+            pinCheck.status === 'used' ? '❌ 사용 완료된 기프티콘입니다' : '❌ 기간이 만료된 기프티콘입니다',
+            `실시간 조회 결과(${pinCheck.provider || '조회처'}) 사용할 수 없는 상품권입니다.`,
+            'is-bad'
+          );
+          return;
+        }
+      }
+
       const label = ai
         ? `AI 검증 완료 · ${[ai.brand, ai.item].filter(Boolean).join(' ') || '상품권'}${ai.expiry ? ` · 유효기간 ${ai.expiry}` : ''}`
         : (aiError
           ? `AI 검증을 건너뛰었습니다 (${aiError})`
           : 'AI 키가 없어 자동 코드 인식만 수행했습니다.');
 
+      const pinLabel = !pinCheck
+        ? (ai && !ai.pin ? ' · 교환번호를 읽지 못해 실시간 조회를 건너뜀' : '')
+        : (pinCheck.status === 'unused'
+          ? ` · 실시간 조회: 미사용 확인(${pinCheck.provider})`
+          : ` · 실시간 조회 불가(${pinCheck.message || pinCheck.provider || '조회처 없음'})`);
+
+      const fullyOk = !!ai && (!pinCheck || pinCheck.status === 'unused');
+
       setGifticonVerifyBox(
-        ai ? '✅ 기프티콘으로 확인되었습니다' : '⚠️ 코드만 가렸습니다',
-        `${label} · 코드 부분은 검은 줄로 가려집니다. 지각하면 이 줄이 벗겨집니다.`,
-        ai ? 'is-ok' : 'is-warn'
+        pinCheck && pinCheck.status === 'unused'
+          ? '✅ 사용 가능한 기프티콘입니다'
+          : (ai ? '✅ 기프티콘으로 확인되었습니다' : '⚠️ 코드만 가렸습니다'),
+        `${label}${pinLabel} · 코드 부분은 검은 줄로 가려집니다. 지각하면 이 줄이 벗겨집니다.`,
+        fullyOk ? 'is-ok' : 'is-warn'
       );
 
       gifticonWorking = {
@@ -3910,6 +3997,8 @@ document.addEventListener('DOMContentLoaded', () => {
         item: (ai && ai.item) || '',
         expiry: (ai && ai.expiry) || '',
         codeType: (ai && ai.codeType) || (heuristicBox ? 'barcode' : 'none'),
+        pinStatus: pinCheck ? pinCheck.status : 'skipped',
+        pinProvider: pinCheck ? (pinCheck.provider || '') : '',
       };
       if (saveBtn) saveBtn.disabled = false;
     } catch (e) {
@@ -3976,13 +4065,25 @@ document.addEventListener('DOMContentLoaded', () => {
     return promiseObj.gifticons[myUid] || null;
   }
 
+  // 공개 노드에는 원본을 넣지 않는다. 원본은 서버 전용 경로에 따로 보관한다.
+  function publicGifticonRecord(rec) {
+    const out = Object.assign({}, rec);
+    delete out.imageFull;
+    return out;
+  }
+
   function saveMyGifticonToPromise(promiseObj, record) {
     const myUid = ensureProfileUid();
     if (!promiseObj || !promiseObj.id || !myUid) return;
     promiseObj.gifticons = promiseObj.gifticons || {};
     promiseObj.gifticons[myUid] = record;
     saveStorage('pa_promises_list', promisesList);
-    dbWrite('promises/' + promiseObj.id + '/gifticons/' + myUid, record);
+    dbWrite('promises/' + promiseObj.id + '/gifticons/' + myUid, publicGifticonRecord(record));
+    // 원본은 클라이언트가 읽을 수 없는 경로(gifticon_private)에 서버를 통해 보관한다.
+    if (record.imageFull) {
+      callFunction('submitGifticonOriginal', { promiseId: promiseObj.id, imageFull: record.imageFull })
+        .catch((e) => console.warn('[기프티콘] 원본 보관 실패:', e && e.message ? e.message : e));
+    }
   }
 
   // ------------------------------------------
@@ -4076,6 +4177,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ------------------------------------------
   function isGifticonRevealDue(p) {
     if (!p || p.penaltyType !== 'gifticon') return false;
+    if (gifticonRevealPending.indexOf(p.id) !== -1) return false;
     if (!amIAttendeeOf(p)) return false;
     if (arrivedNotified.includes(p.id)) return false;
     const target = Number(p.targetTimestamp);
@@ -4090,10 +4192,25 @@ document.addEventListener('DOMContentLoaded', () => {
       const myUid = ensureProfileUid();
       const mine = myGifticonOf(p);
       if (!myUid || !mine) return;
-      mine.revealed = true;
-      mine.revealedAt = Date.now();
-      saveStorage('pa_promises_list', promisesList);
-      dbWrite('promises/' + p.id + '/gifticons/' + myUid, mine);
+
+      gifticonRevealPending.push(p.id);
+      // 서버가 지각을 확인하고 보관해 둔 원본을 공개한다.
+      callFunction('revealGifticon', { promiseId: p.id })
+        .then(() => {
+          mine.revealed = true;
+          mine.revealedAt = Date.now();
+          saveStorage('pa_promises_list', promisesList);
+        })
+        .catch((e) => {
+          console.warn('[기프티콘] 서버 공개 실패, 로컬 공개로 대체:', e && e.message ? e.message : e);
+          // 서버 함수를 쓸 수 없는 환경에서는 내 기기에 있는 원본으로 공개한다.
+          mine.revealed = true;
+          mine.revealedAt = Date.now();
+          saveStorage('pa_promises_list', promisesList);
+          const payload = { revealed: true, revealedAt: mine.revealedAt };
+          if (mine.imageFull) payload.imageFull = mine.imageFull;
+          dbWrite('promises/' + p.id + '/gifticons/' + myUid, Object.assign(publicGifticonRecord(mine), payload));
+        });
     });
   }
 

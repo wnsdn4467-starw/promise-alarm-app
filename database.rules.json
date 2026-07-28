@@ -84,8 +84,12 @@
       }
     },
 
-    "user_promises": {
-      "$uid": {
+    "gifticon_private": {
+      ".read": false,
+      ".write": false
+    },
+
+    "user_promises": {      "$uid": {
         ".read": "auth != null && auth.uid === $uid",
         "$promiseId": {
           ".write": "auth != null && (auth.uid === $uid || root.child('promises').child($promiseId).child('hostUid').val() === auth.uid)",
