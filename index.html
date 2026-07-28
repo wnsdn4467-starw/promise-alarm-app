@@ -465,7 +465,6 @@
         <div class="input-group">
           <label>도착 인정 반경 (m)</label>
           <input type="number" id="inputAutoArrivalDist" placeholder="200" value="200" step="50" min="50" required>
-          <span style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">반경 이내 진입 시 자동 도착 처리됩니다. (추천: 200m)</span>
         </div>
 
         <!-- 약속 시간 (독립 섹션) -->
@@ -474,7 +473,6 @@
             <span class="form-section-icon"><i data-lucide="clock"></i></span>
             <div class="form-section-title">
               <strong>약속 시간</strong>
-              <span>시작과 종료 시간을 정해 주세요.</span>
             </div>
           </div>
 
@@ -495,7 +493,6 @@
             <button type="button" class="duration-chip" data-min="180">3시간</button>
             <button type="button" class="duration-chip" data-min="300">5시간</button>
           </div>
-          <span class="form-section-hint">종료 시간이 지나면 약속이 자동으로 완료 처리되고 캘린더에 기록됩니다.</span>
         </section>
 
         <div class="input-group">
@@ -510,7 +507,6 @@
             <option value="1440">약속 1일 전부터</option>
             <option value="4320">약속 3일 전부터</option>
           </select>
-          <span style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">공개 시점 전에는 약속 장소만 보이고 참가자 위치·거리·GPS 상태는 숨겨집니다.</span>
         </div>
 
         <!-- 지각 벌칙 (독립 섹션) -->
@@ -519,7 +515,6 @@
             <span class="form-section-icon"><i data-lucide="alert-triangle"></i></span>
             <div class="form-section-title">
               <strong>지각 벌칙</strong>
-              <span>약속 정각까지 도착하지 않은 사람에게 적용됩니다.</span>
             </div>
           </div>
 
@@ -528,12 +523,10 @@
             <button type="button" class="penalty-tile is-active" data-penalty="alarm" role="radio" aria-checked="true">
               <span class="penalty-tile-emoji" aria-hidden="true">🔔</span>
               <strong>알람</strong>
-              <span class="penalty-tile-desc">알람 소리 반복</span>
             </button>
             <button type="button" class="penalty-tile" data-penalty="vibrate" role="radio" aria-checked="false">
               <span class="penalty-tile-emoji" aria-hidden="true">📳</span>
               <strong>진동</strong>
-              <span class="penalty-tile-desc">기기 진동 반복</span>
             </button>
             <button type="button" class="penalty-tile is-locked" data-penalty="gifticon" role="radio" aria-checked="false" aria-disabled="true">
               <span class="penalty-tile-emoji" aria-hidden="true">🎁</span>
@@ -554,7 +547,7 @@
             <button type="button" class="penalty-chip" data-min="60" role="radio" aria-checked="false">60분</button>
           </div>
 
-          <span id="penaltyHintText" class="form-section-hint">약속 시간이 지나면 아직 도착하지 않은 참가자 기기에서 알람이 울립니다. 도착하면 즉시 멈춥니다.</span>
+          <span id="penaltyHintText" class="form-section-hint" hidden></span>
 
           <!-- 실제 제출 값 (기존 로직 호환) -->
           <input type="hidden" id="selectPenaltyType" value="alarm">

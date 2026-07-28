@@ -3515,6 +3515,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 도착하면 지각 벌칙(알람/진동)을 즉시 중지
     evaluatePenaltyState();
+    cancelNativeAlarmsFor(promiseObj.id);
 
     // 도착 확인 창 (지각 창과 같은 형태, 오른쪽 위 X로 닫는다)
     showArrivalOverlay(promiseObj);
@@ -3593,9 +3594,7 @@ document.addEventListener('DOMContentLoaded', () => {
   //    - 브라우저 정책상 소리/진동은 사용자 조작(터치) 이후에만 시작할 수 있다.
   // ==========================================
   const PENALTY_MAX_DURATION_MS = 6 * 60 * 60 * 1000;  // 정각 후 6시간이면 자동 종료
-  const PENALTY_SNOOZE_MS = 5 * 60 * 1000;
 
-  let penaltySnoozeMap = loadStorage('pa_penalty_snooze', {});
   let penaltyActiveId = null;
   let penaltyActiveType = null;
   let penaltyAudioCtx = null;
@@ -3603,6 +3602,128 @@ document.addEventListener('DOMContentLoaded', () => {
   let penaltyVibrateTimer = null;
   let penaltyBannerEl = null;
   let penaltyAudioUnlocked = false;
+  let penaltySirenEl = null;        // 백그라운드에서도 계속 재생되는 <audio> 루프
+  let penaltySirenUrl = null;
+  let penaltySirenWatchTimer = null;
+  let penaltyWakeLock = null;
+
+  // ------------------------------------------
+  // 네이티브(Capacitor) 브릿지
+  //  - 안드로이드 앱으로 감싸서 실행하면, 앱이 종료된 상태에서도 OS 알람이 울리도록
+  //    LocalNotifications 로 지각 시각에 반복 알림을 예약한다.
+  //  - 브라우저에서 열었을 때는 window.Capacitor 가 없어 모든 함수가 조용히 무시된다.
+  // ------------------------------------------
+  const NATIVE_ALARM_CHANNEL = 'promise-late-alarm';
+  const NATIVE_ALARM_REPEATS = 12;         // 정각부터 1분 간격 12회
+  let nativeAlarmReady = false;
+  let nativeScheduledKey = '';
+
+  function nativeBridge() {
+    const cap = window.Capacitor;
+    if (!cap || typeof cap.nativePromise !== 'function') return null;
+    if (typeof cap.isNativePlatform === 'function' && !cap.isNativePlatform()) return null;
+    return cap;
+  }
+
+  function isNativeApp() {
+    return !!nativeBridge();
+  }
+
+  function nativeCall(plugin, method, options) {
+    const cap = nativeBridge();
+    if (!cap) return Promise.resolve(null);
+    try {
+      return Promise.resolve(cap.nativePromise(plugin, method, options || {})).catch(() => null);
+    } catch (e) {
+      return Promise.resolve(null);
+    }
+  }
+
+  async function initNativeAlarm() {
+    if (!isNativeApp() || nativeAlarmReady) return;
+    await nativeCall('LocalNotifications', 'requestPermissions');
+    // 알람 전용 채널: 최대 중요도 + 소리 + 진동 (사용자가 앱을 닫아도 OS가 울린다)
+    await nativeCall('LocalNotifications', 'createChannel', {
+      id: NATIVE_ALARM_CHANNEL,
+      name: '지각 알람',
+      description: '약속 시간에 도착하지 않으면 울리는 알람',
+      importance: 5,
+      visibility: 1,
+      vibration: true,
+      sound: null,
+    });
+    nativeAlarmReady = true;
+  }
+
+  // 알림 id 는 정수여야 하므로 약속 id 를 해시해서 사용한다.
+  function nativeAlarmBaseId(promiseId) {
+    let h = 0;
+    for (let i = 0; i < String(promiseId).length; i += 1) {
+      h = (h * 31 + String(promiseId).charCodeAt(i)) % 100000;
+    }
+    return h * 100;
+  }
+
+  async function syncNativeAlarms() {
+    if (!isNativeApp()) return;
+    await initNativeAlarm();
+
+    // 아직 도착하지 않은, 앞으로/방금 정각이 지난 알람 벌칙 약속만 예약한다.
+    const now = Date.now();
+    const targets = promisesList.filter((p) => {
+      if (!p || !p.id) return false;
+      if (p.penaltyType !== 'alarm' && p.penaltyType !== 'vibrate') return false;
+      if (!amIAttendeeOf(p)) return false;
+      if (arrivedNotified.includes(p.id)) return false;
+      const ts = Number(p.targetTimestamp);
+      if (!Number.isFinite(ts)) return false;
+      const endTs = promiseEndTs(p);
+      return Number.isFinite(endTs) ? now < endTs : true;
+    });
+
+    const key = targets.map((p) => `${p.id}:${p.targetTimestamp}:${p.penaltyDurationMin || 0}`).sort().join('|');
+    if (key === nativeScheduledKey) return;
+    nativeScheduledKey = key;
+
+    // 예약 전에 기존 예약을 정리한다.
+    const pending = await nativeCall('LocalNotifications', 'getPending');
+    if (pending && Array.isArray(pending.notifications) && pending.notifications.length) {
+      await nativeCall('LocalNotifications', 'cancel', { notifications: pending.notifications.map((n) => ({ id: n.id })) });
+    }
+
+    const notifications = [];
+    targets.forEach((p) => {
+      const base = nativeAlarmBaseId(p.id);
+      const durMin = Number(p.penaltyDurationMin) || 0;
+      const repeats = durMin > 0 ? Math.min(durMin, NATIVE_ALARM_REPEATS) : NATIVE_ALARM_REPEATS;
+      for (let i = 0; i < repeats; i += 1) {
+        const at = Number(p.targetTimestamp) + i * 60000;
+        if (at < now - 30000) continue;               // 이미 많이 지난 회차는 건너뜀
+        notifications.push({
+          id: base + i,
+          title: '🔔 지각!!',
+          body: `${p.title || '약속'} · 아직 도착하지 않았습니다.`,
+          channelId: NATIVE_ALARM_CHANNEL,
+          schedule: { at: new Date(at).toISOString(), allowWhileIdle: true },
+          ongoing: false,
+          autoCancel: true,
+        });
+      }
+    });
+
+    if (notifications.length) {
+      await nativeCall('LocalNotifications', 'schedule', { notifications });
+    }
+  }
+
+  async function cancelNativeAlarmsFor(promiseId) {
+    if (!isNativeApp()) return;
+    const base = nativeAlarmBaseId(promiseId);
+    const ids = [];
+    for (let i = 0; i < NATIVE_ALARM_REPEATS; i += 1) ids.push({ id: base + i });
+    await nativeCall('LocalNotifications', 'cancel', { notifications: ids });
+    nativeScheduledKey = '';
+  }
 
   function isPenaltyDueFor(p) {
     if (!p || !p.id) return false;
@@ -3630,12 +3751,13 @@ document.addEventListener('DOMContentLoaded', () => {
       : PENALTY_MAX_DURATION_MS;
     if (now > target + limitMs) return false;
 
-    if (Number(penaltySnoozeMap[p.id] || 0) > now) return false;
-
     return true;
   }
 
   function evaluatePenaltyState() {
+    // 네이티브 앱이면 OS 알람도 함께 예약해둔다. (앱이 닫혀 있어도 울리게)
+    syncNativeAlarms();
+
     // 정각이 가장 먼저 지난 약속 1건만 울린다.
     const due = promisesList
       .filter(isPenaltyDueFor)
@@ -3667,6 +3789,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (penaltyBeepTimer) { clearInterval(penaltyBeepTimer); penaltyBeepTimer = null; }
     if (penaltyVibrateTimer) { clearInterval(penaltyVibrateTimer); penaltyVibrateTimer = null; }
     if (navigator.vibrate) { try { navigator.vibrate(0); } catch (e) {} }
+    stopPenaltySiren();
+    releasePenaltyWakeLock();
     hidePenaltyBanner();
   }
 
@@ -3685,7 +3809,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function playPenaltyBeep() {
-    if (!penaltyAudioCtx || penaltyAudioCtx.state !== 'running') return;
+    if (!penaltyAudioCtx) return;
+    // 절전/포커스 이탈로 잠깐 멈췄더라도 다시 깨워 계속 울린다.
+    if (penaltyAudioCtx.state === 'suspended') {
+      try { penaltyAudioCtx.resume(); } catch (e) {}
+    }
+    if (penaltyAudioCtx.state !== 'running') return;
     const ctx = penaltyAudioCtx;
     const now = ctx.currentTime;
 
@@ -3702,9 +3831,10 @@ document.addEventListener('DOMContentLoaded', () => {
       osc.frequency.linearRampToValueAtTime(560, base + step * 2);
     }
 
+    // 지각 알람은 최대 음량으로 고정한다. (앱 내에서 낮출 수 없음)
     gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.22, now + 0.05);
-    gain.gain.setValueAtTime(0.22, now + step * 4 - 0.1);
+    gain.gain.exponentialRampToValueAtTime(1.0, now + 0.05);
+    gain.gain.setValueAtTime(1.0, now + step * 4 - 0.1);
     gain.gain.exponentialRampToValueAtTime(0.0001, now + step * 4);
 
     osc.connect(gain).connect(ctx.destination);
@@ -3712,8 +3842,139 @@ document.addEventListener('DOMContentLoaded', () => {
     osc.stop(now + step * 4 + 0.02);
   }
 
+  // ------------------------------------------
+  // 백그라운드(탭 전환 / 화면 잠금)에서도 계속 울리는 사이렌
+  //  - WebAudio 는 탭이 숨겨지면 브라우저가 컨텍스트를 정지시킬 수 있다.
+  //  - <audio> 미디어 재생은 백그라운드에서도 유지되므로 사이렌 루프를 WAV 로 만들어 재생한다.
+  // ------------------------------------------
+  function buildSirenWavUrl() {
+    if (penaltySirenUrl) return penaltySirenUrl;
+
+    const rate = 22050;
+    const dur = 2.8;                     // 루프 1회 길이(초)
+    const total = Math.floor(rate * dur);
+    const bytes = new ArrayBuffer(44 + total * 2);
+    const view = new DataView(bytes);
+
+    const writeStr = (off, s) => { for (let i = 0; i < s.length; i += 1) view.setUint8(off + i, s.charCodeAt(i)); };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + total * 2, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);         // PCM
+    view.setUint16(22, 1, true);         // mono
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, 'data');
+    view.setUint32(40, total * 2, true);
+
+    // 560Hz ↔ 1180Hz 를 왕복하는 톱니파 사이렌 (2회 스윕)
+    const sweep = 0.7;                   // 한 방향 스윕 시간
+    let phase = 0;
+    for (let i = 0; i < total; i += 1) {
+      const t = i / rate;
+      const pos = (t % (sweep * 2)) / sweep;                 // 0→2
+      const k = pos <= 1 ? pos : 2 - pos;                    // 0→1→0
+      const freq = 560 + (1180 - 560) * k;
+      phase += freq / rate;
+      const saw = 2 * (phase % 1) - 1;                       // 톱니파
+      // 루프 이음새에서 '툭' 소리가 나지 않게 앞뒤 5ms 페이드
+      const fade = Math.min(1, t / 0.005, (dur - t) / 0.005);
+      const v = Math.max(-1, Math.min(1, saw * 0.92 * fade));
+      view.setInt16(44 + i * 2, v * 32767, true);
+    }
+
+    penaltySirenUrl = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+    return penaltySirenUrl;
+  }
+
+  function ensurePenaltySirenEl() {
+    if (penaltySirenEl) return penaltySirenEl;
+    const el = document.createElement('audio');
+    el.src = buildSirenWavUrl();
+    el.loop = true;
+    el.volume = 1.0;                     // 앱에서 음량을 낮출 수 없다
+    el.preload = 'auto';
+    el.setAttribute('playsinline', '');
+    // 재생이 시작되면 폴백 비프는 중지 (두 소리가 겹쳐 끊기는 것처럼 들리는 문제 방지)
+    el.addEventListener('playing', () => {
+      if (penaltyBeepTimer) { clearInterval(penaltyBeepTimer); penaltyBeepTimer = null; }
+    });
+    // 시스템이 임의로 멈추면 즉시 되살린다.
+    el.addEventListener('pause', () => {
+      if (penaltyActiveId && penaltyActiveType === 'alarm') {
+        try { el.play(); } catch (e) {}
+      }
+    });
+    el.addEventListener('volumechange', () => {
+      if (penaltyActiveId && el.volume < 1) el.volume = 1.0;
+    });
+    penaltySirenEl = el;
+    return el;
+  }
+
+  function startPenaltySiren() {
+    const el = ensurePenaltySirenEl();
+    el.volume = 1.0;
+    if (!el.paused) {                    // 이미 울리는 중이면 건드리지 않는다 (끊김 방지)
+      startPenaltySirenWatch();
+      return;
+    }
+    const p = el.play();
+    if (p && typeof p.catch === 'function') {
+      p.catch(() => {
+        // 사용자 제스처 전에는 거부된다 → WebAudio 비프로 대체 시도
+        if (unlockPenaltyAudio() && !penaltyBeepTimer) startPenaltyBeepLoop();
+      });
+    }
+    startPenaltySirenWatch();
+  }
+
+  function startPenaltySirenWatch() {
+    if (penaltySirenWatchTimer) return;
+    // 1초마다 상태를 확인해 멈춰 있으면 다시 재생시킨다.
+    penaltySirenWatchTimer = setInterval(() => {
+      if (!penaltyActiveId || penaltyActiveType !== 'alarm' || !penaltySirenEl) return;
+      if (penaltySirenEl.paused || penaltySirenEl.ended) {
+        try { penaltySirenEl.play(); } catch (e) {}
+      }
+      if (penaltySirenEl.volume < 1) penaltySirenEl.volume = 1.0;
+    }, 1000);
+  }
+
+  function stopPenaltySiren() {
+    if (penaltySirenWatchTimer) { clearInterval(penaltySirenWatchTimer); penaltySirenWatchTimer = null; }
+    if (penaltySirenEl) {
+      try { penaltySirenEl.pause(); penaltySirenEl.currentTime = 0; } catch (e) {}
+    }
+  }
+
+  // 화면 잠금으로 알람이 끊기지 않게 (지원 브라우저에서만)
+  function requestPenaltyWakeLock() {
+    if (penaltyWakeLock || !navigator.wakeLock) return;
+    navigator.wakeLock.request('screen')
+      .then((lock) => {
+        penaltyWakeLock = lock;
+        lock.addEventListener('release', () => { penaltyWakeLock = null; });
+      })
+      .catch(() => {});
+  }
+
+  function releasePenaltyWakeLock() {
+    if (!penaltyWakeLock) return;
+    try { penaltyWakeLock.release(); } catch (e) {}
+    penaltyWakeLock = null;
+  }
+
   function startPenaltyAlarm() {
-    if (!unlockPenaltyAudio()) return;   // 배너의 [소리 켜기] 버튼으로 다시 시도
+    startPenaltySiren();
+    requestPenaltyWakeLock();
+  }
+
+  function startPenaltyBeepLoop() {
     playPenaltyBeep();
     if (penaltyBeepTimer) clearInterval(penaltyBeepTimer);
     penaltyBeepTimer = setInterval(playPenaltyBeep, 1500);
@@ -3727,10 +3988,9 @@ document.addEventListener('DOMContentLoaded', () => {
     penaltyVibrateTimer = setInterval(buzz, 1200);
   }
 
-  function snoozePenalty(promiseId) {
-    penaltySnoozeMap[promiseId] = Date.now() + PENALTY_SNOOZE_MS;
-    saveStorage('pa_penalty_snooze', penaltySnoozeMap);
-    stopPenalty();
+  function isPenaltySoundPlaying() {
+    if (penaltySirenEl && !penaltySirenEl.paused) return true;
+    return !!penaltyBeepTimer;
   }
 
   function hidePenaltyBanner() {
@@ -3748,7 +4008,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let notice = '';
     if (isVibrate && !navigator.vibrate) {
       notice = '이 기기(브라우저)는 진동을 지원하지 않아 화면 경고만 표시됩니다.';
-    } else if (!isVibrate && (!penaltyAudioCtx || penaltyAudioCtx.state !== 'running')) {
+    } else if (!isVibrate && !isPenaltySoundPlaying()) {
       needSoundBtn = true;
       notice = '브라우저 정책상 화면을 한 번 눌러야 사이렌 소리가 시작됩니다.';
     }
@@ -3780,10 +4040,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     penaltyBannerEl.innerHTML = `
       <div class="penalty-overlay-card">
-        <button type="button" class="penalty-overlay-close" id="btnPenaltyOverlayClose" aria-label="지각 알림 창 닫기">
-          <i data-lucide="x"></i>
-        </button>
-
         <div class="penalty-siren" aria-hidden="true">
           <span class="penalty-siren-ring"></span>
           <span class="penalty-siren-ring delay"></span>
@@ -3800,7 +4056,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         <div class="penalty-overlay-actions">
           ${needSoundBtn ? '<button type="button" class="penalty-btn primary" id="btnPenaltyEnableSound">소리 켜기</button>' : ''}
-          <button type="button" class="penalty-btn" id="btnPenaltySnooze">5분 미루기</button>
         </div>
       </div>
     `;
@@ -3809,25 +4064,32 @@ document.addEventListener('DOMContentLoaded', () => {
       try { window.lucide.createIcons(); } catch (e) {}
     }
 
-    const closeBtn = document.getElementById('btnPenaltyOverlayClose');
-    if (closeBtn) {
-      // 오른쪽 위 X: 창을 닫고 사이렌도 멈춘다. (5분 뒤 다시 확인)
-      closeBtn.addEventListener('click', () => snoozePenalty(promiseObj.id));
-    }
-
     const soundBtn = document.getElementById('btnPenaltyEnableSound');
     if (soundBtn) {
       soundBtn.addEventListener('click', () => {
-        if (unlockPenaltyAudio()) startPenaltyAlarm();
+        unlockPenaltyAudio();
+        startPenaltyAlarm();
         evaluatePenaltyState();
       });
     }
-
-    const snoozeBtn = document.getElementById('btnPenaltySnooze');
-    if (snoozeBtn) {
-      snoozeBtn.addEventListener('click', () => snoozePenalty(promiseObj.id));
-    }
   }
+
+  // 탭이 다시 보이거나 창이 포커스를 되찾으면 알람이 살아있는지 확인해 다시 울린다.
+  function resumePenaltyIfActive() {
+    if (!penaltyActiveId) return;
+    if (penaltyActiveType === 'vibrate') {
+      if (!penaltyVibrateTimer) startPenaltyVibration();
+      return;
+    }
+    if (!isPenaltySoundPlaying()) startPenaltyAlarm();
+    else requestPenaltyWakeLock();
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') resumePenaltyIfActive();
+  });
+  window.addEventListener('focus', resumePenaltyIfActive);
+  window.addEventListener('pageshow', resumePenaltyIfActive);
 
   // ==========================================
   // 9. 남은 시간 카운트다운 + 사전 알림 (1시간/30분/10분/5분/1분 전)
@@ -4233,13 +4495,11 @@ document.addEventListener('DOMContentLoaded', () => {
     checkPromiseCompletion();
   }
 
-  // 첫 사용자 조작에서 오디오 잠금 해제 (알람 벌칙 대비)
+  // 사용자 조작마다 오디오 잠금 해제 + 울려야 할 알람이 멈춰 있으면 즉시 재개
   ['pointerdown', 'touchstart', 'keydown'].forEach((evt) => {
     document.addEventListener(evt, () => {
-      if (!penaltyAudioUnlocked) {
-        unlockPenaltyAudio();
-        if (penaltyActiveId && penaltyActiveType === 'alarm' && !penaltyBeepTimer) startPenaltyAlarm();
-      }
+      unlockPenaltyAudio();
+      resumePenaltyIfActive();
       // 알림 권한도 사용자 조작 시점에 요청해야 iOS/Safari 에서 허용된다.
       ensureNotificationPermission();
     }, { once: false, passive: true });
