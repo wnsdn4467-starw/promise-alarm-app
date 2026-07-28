@@ -35,6 +35,7 @@
       "server.js",
       "ps_server.ps1",
       "*.bat",
+      "native/**",
       "css/style.original.css"
     ]
   }

@@ -1,0 +1,46 @@
+name: Build Android APK
+
+# 로컬에 Android SDK/Java 가 없어도 GitHub 에서 APK 를 빌드한다.
+# 실행: GitHub > Actions > "Build Android APK" > Run workflow
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'native/**'
+      - '.github/workflows/android.yml'
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install deps
+        working-directory: native
+        run: npm install
+
+      - name: Capacitor sync
+        working-directory: native
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: native/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: promise-alarm-debug-apk
+          path: native/android/app/build/outputs/apk/debug/app-debug.apk
