@@ -3608,15 +3608,14 @@ document.addEventListener('DOMContentLoaded', () => {
   let penaltyWakeLock = null;
 
   // ------------------------------------------
-  // 네이티브(Capacitor) 브릿지
-  //  - 안드로이드 앱으로 감싸서 실행하면, 앱이 종료된 상태에서도 OS 알람이 울리도록
-  //    LocalNotifications 로 지각 시각에 반복 알림을 예약한다.
-  //  - 브라우저에서 열었을 때는 window.Capacitor 가 없어 모든 함수가 조용히 무시된다.
+  // 네이티브(Capacitor) 브릿지 — 알라미 방식 전체 화면 알람
+  //  - 안드로이드 앱으로 감싸 실행하면 PromiseAlarm 플러그인이
+  //    정확 알람(setAlarmClock)으로 예약 → 시각이 되면 포그라운드 서비스가
+  //    알람 볼륨을 최대로 올리고 사이렌을 무한 반복 + 잠금화면 위 전체 화면을 띄운다.
+  //  - 앱을 완전히 종료해도, 화면이 꺼져 있어도, 재부팅 후에도 울린다.
+  //  - 브라우저에서는 window.Capacitor 가 없어 모든 함수가 조용히 무시된다.
   // ------------------------------------------
-  const NATIVE_ALARM_CHANNEL = 'promise-late-alarm-v2';
-  const NATIVE_ALARM_SOUND = 'late_alarm.wav';   // native/android/app/src/main/res/raw
-  const NATIVE_ALARM_STEP_MS = 30 * 1000;        // 30초 간격
-  const NATIVE_ALARM_REPEATS = 40;               // 최대 20분 동안 반복
+  const NATIVE_ALARM_MAX_MS = 60 * 60 * 1000;    // 지속 시간 미설정 시 안전장치 (1시간)
   let nativeAlarmReady = false;
   let nativeScheduledKey = '';
 
@@ -3643,34 +3642,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function initNativeAlarm() {
     if (!isNativeApp() || nativeAlarmReady) return;
-    await nativeCall('LocalNotifications', 'requestPermissions');
-    // 알람 전용 채널: 최대 중요도 + 소리 + 진동 (사용자가 앱을 닫아도 OS가 울린다)
-    await nativeCall('LocalNotifications', 'createChannel', {
-      id: NATIVE_ALARM_CHANNEL,
-      name: '지각 알람',
-      description: '약속 시간에 도착하지 않으면 울리는 알람',
-      importance: 5,
-      visibility: 1,
-      vibration: true,
-      sound: NATIVE_ALARM_SOUND,
-    });
     nativeAlarmReady = true;
+    // 알림 권한 (Android 13+ 는 포그라운드 서비스 알림에도 필요)
+    await nativeCall('LocalNotifications', 'requestPermissions');
+    // '알람 및 리마인더' 권한이 없으면 정확한 시각에 울릴 수 없으므로 설정 화면을 띄운다.
+    const st = await nativeCall('PromiseAlarm', 'status');
+    if (st && st.canScheduleExact === false) {
+      await nativeCall('PromiseAlarm', 'openExactAlarmSettings');
+    }
   }
 
-  // 알림 id 는 정수여야 하므로 약속 id 를 해시해서 사용한다.
+  // 알람 id 는 정수여야 하므로 약속 id 를 해시해서 사용한다.
   function nativeAlarmBaseId(promiseId) {
     let h = 0;
     for (let i = 0; i < String(promiseId).length; i += 1) {
-      h = (h * 31 + String(promiseId).charCodeAt(i)) % 100000;
+      h = (h * 31 + String(promiseId).charCodeAt(i)) % 1000000;
     }
-    return h * 100;
+    return h + 1;
   }
 
   async function syncNativeAlarms() {
     if (!isNativeApp()) return;
     await initNativeAlarm();
 
-    // 아직 도착하지 않은, 앞으로/방금 정각이 지난 알람 벌칙 약속만 예약한다.
+    // 아직 도착하지 않았고 종료되지 않은, 알람 벌칙이 걸린 내 약속만 예약한다.
     const now = Date.now();
     const targets = promisesList.filter((p) => {
       if (!p || !p.id) return false;
@@ -3683,51 +3678,32 @@ document.addEventListener('DOMContentLoaded', () => {
       return Number.isFinite(endTs) ? now < endTs : true;
     });
 
-    const key = targets.map((p) => `${p.id}:${p.targetTimestamp}:${p.penaltyDurationMin || 0}`).sort().join('|');
+    const key = targets
+      .map((p) => `${p.id}:${p.targetTimestamp}:${p.penaltyDurationMin || 0}:${p.penaltyType}`)
+      .sort().join('|');
     if (key === nativeScheduledKey) return;
     nativeScheduledKey = key;
 
-    // 예약 전에 기존 예약을 정리한다.
-    const pending = await nativeCall('LocalNotifications', 'getPending');
-    if (pending && Array.isArray(pending.notifications) && pending.notifications.length) {
-      await nativeCall('LocalNotifications', 'cancel', { notifications: pending.notifications.map((n) => ({ id: n.id })) });
-    }
-
-    const notifications = [];
-    targets.forEach((p) => {
-      const base = nativeAlarmBaseId(p.id);
+    const alarms = targets.map((p) => {
       const durMin = Number(p.penaltyDurationMin) || 0;
-      const maxSteps = durMin > 0
-        ? Math.min(Math.ceil((durMin * 60000) / NATIVE_ALARM_STEP_MS), NATIVE_ALARM_REPEATS)
-        : NATIVE_ALARM_REPEATS;
-      for (let i = 0; i < maxSteps; i += 1) {
-        const at = Number(p.targetTimestamp) + i * NATIVE_ALARM_STEP_MS;
-        if (at < now - 30000) continue;               // 이미 많이 지난 회차는 건너뜀
-        notifications.push({
-          id: base + i,
-          title: '🔔 지각!!',
-          body: `${p.title || '약속'} · 아직 도착하지 않았습니다.`,
-          channelId: NATIVE_ALARM_CHANNEL,
-          sound: NATIVE_ALARM_SOUND,
-          schedule: { at: new Date(at).toISOString(), allowWhileIdle: true },
-          ongoing: false,
-          autoCancel: true,
-        });
-      }
+      return {
+        id: nativeAlarmBaseId(p.id),
+        title: p.title || '약속',
+        at: Number(p.targetTimestamp),
+        durationMs: durMin > 0 ? durMin * 60000 : NATIVE_ALARM_MAX_MS,
+        vibrateOnly: p.penaltyType === 'vibrate',
+      };
     });
 
-    if (notifications.length) {
-      await nativeCall('LocalNotifications', 'schedule', { notifications });
-    }
+    await nativeCall('PromiseAlarm', 'schedule', { alarms });
   }
 
   async function cancelNativeAlarmsFor(promiseId) {
     if (!isNativeApp()) return;
-    const base = nativeAlarmBaseId(promiseId);
-    const ids = [];
-    for (let i = 0; i < NATIVE_ALARM_REPEATS; i += 1) ids.push({ id: base + i });
-    await nativeCall('LocalNotifications', 'cancel', { notifications: ids });
+    // 울리는 중이면 즉시 멈추고, 남은 예약 목록을 다시 계산한다.
+    await nativeCall('PromiseAlarm', 'stop');
     nativeScheduledKey = '';
+    syncNativeAlarms();
   }
 
   function isPenaltyDueFor(p) {
@@ -3788,6 +3764,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function stopPenalty() {
+    const wasActive = !!penaltyActiveId;
     penaltyActiveId = null;
     penaltyActiveType = null;
 
@@ -3797,6 +3774,9 @@ document.addEventListener('DOMContentLoaded', () => {
     stopPenaltySiren();
     releasePenaltyWakeLock();
     hidePenaltyBanner();
+
+    // 네이티브 알람이 울리는 중이었다면 함께 멈춘다. (중복 호출 방지 위해 상태 전환 시에만)
+    if (wasActive && isNativeApp()) nativeCall('PromiseAlarm', 'stop');
   }
 
   // 오디오는 사용자 제스처 후에만 재생 가능하다. 첫 터치에서 컨텍스트를 깨워둔다.
