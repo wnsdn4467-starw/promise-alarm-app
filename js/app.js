@@ -3613,8 +3613,10 @@ document.addEventListener('DOMContentLoaded', () => {
   //    LocalNotifications 로 지각 시각에 반복 알림을 예약한다.
   //  - 브라우저에서 열었을 때는 window.Capacitor 가 없어 모든 함수가 조용히 무시된다.
   // ------------------------------------------
-  const NATIVE_ALARM_CHANNEL = 'promise-late-alarm';
-  const NATIVE_ALARM_REPEATS = 12;         // 정각부터 1분 간격 12회
+  const NATIVE_ALARM_CHANNEL = 'promise-late-alarm-v2';
+  const NATIVE_ALARM_SOUND = 'late_alarm.wav';   // native/android/app/src/main/res/raw
+  const NATIVE_ALARM_STEP_MS = 30 * 1000;        // 30초 간격
+  const NATIVE_ALARM_REPEATS = 40;               // 최대 20분 동안 반복
   let nativeAlarmReady = false;
   let nativeScheduledKey = '';
 
@@ -3650,7 +3652,7 @@ document.addEventListener('DOMContentLoaded', () => {
       importance: 5,
       visibility: 1,
       vibration: true,
-      sound: null,
+      sound: NATIVE_ALARM_SOUND,
     });
     nativeAlarmReady = true;
   }
@@ -3695,15 +3697,18 @@ document.addEventListener('DOMContentLoaded', () => {
     targets.forEach((p) => {
       const base = nativeAlarmBaseId(p.id);
       const durMin = Number(p.penaltyDurationMin) || 0;
-      const repeats = durMin > 0 ? Math.min(durMin, NATIVE_ALARM_REPEATS) : NATIVE_ALARM_REPEATS;
-      for (let i = 0; i < repeats; i += 1) {
-        const at = Number(p.targetTimestamp) + i * 60000;
+      const maxSteps = durMin > 0
+        ? Math.min(Math.ceil((durMin * 60000) / NATIVE_ALARM_STEP_MS), NATIVE_ALARM_REPEATS)
+        : NATIVE_ALARM_REPEATS;
+      for (let i = 0; i < maxSteps; i += 1) {
+        const at = Number(p.targetTimestamp) + i * NATIVE_ALARM_STEP_MS;
         if (at < now - 30000) continue;               // 이미 많이 지난 회차는 건너뜀
         notifications.push({
           id: base + i,
           title: '🔔 지각!!',
           body: `${p.title || '약속'} · 아직 도착하지 않았습니다.`,
           channelId: NATIVE_ALARM_CHANNEL,
+          sound: NATIVE_ALARM_SOUND,
           schedule: { at: new Date(at).toISOString(), allowWhileIdle: true },
           ongoing: false,
           autoCancel: true,
@@ -3970,6 +3975,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function startPenaltyAlarm() {
+    // 네이티브 앱에서는 OS 예약 알람이 소리를 담당한다. (앱을 꺼도 울리고, 소리가 겹치지 않게)
+    if (isNativeApp()) {
+      requestPenaltyWakeLock();
+      return;
+    }
     startPenaltySiren();
     requestPenaltyWakeLock();
   }
@@ -3989,6 +3999,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function isPenaltySoundPlaying() {
+    if (isNativeApp()) return true;      // OS 알람이 담당
     if (penaltySirenEl && !penaltySirenEl.paused) return true;
     return !!penaltyBeepTimer;
   }
