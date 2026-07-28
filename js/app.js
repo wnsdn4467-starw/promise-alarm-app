@@ -882,6 +882,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 벌칙 표시 문구 (종류 + 지속 시간)
   function penaltyLabel(promiseObj) {
     const type = promiseObj && promiseObj.penaltyType;
+    if (type === 'gifticon') return '기프티콘 코드 공개';
     if (type !== 'alarm' && type !== 'vibrate') return '없음';
     const min = Number(promiseObj.penaltyDurationMin) || 0;
     const dur = min > 0 ? `${min}분간` : '도착할 때까지';
@@ -2426,6 +2427,14 @@ document.addEventListener('DOMContentLoaded', () => {
         </button>
       `;
 
+      // 기프티콘 벌칙 약속은 카드에서 바로 기프티콘을 확인할 수 있다.
+      const gifticonCount = p.gifticons ? Object.keys(p.gifticons).length : 0;
+      const gifticonButtonHtml = p.penaltyType === 'gifticon' ? `
+        <button class="btn-map-view btn-open-gifticon" data-id="${escapeHtml(p.id)}" style="margin-top:6px;">
+          <i data-lucide="gift"></i> 기프티콘 확인 (${gifticonCount}명 등록)
+        </button>
+      ` : '';
+
       let distStr = '위치 확인 중';
       let isCurrentlyWithinRadius = false;
       const arrivalRadius = p.arrivalRadiusMeters || 300;
@@ -2463,7 +2472,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="card-info">
           <div class="card-info-item"><i data-lucide="map-pin"></i> <span class="ci-label">위치</span> <span class="ci-value">${locationDisplay}</span> <span class="ci-tail">${escapeHtml(distStr)}</span></div>
           <div class="card-info-item"><i data-lucide="clock"></i> <span class="ci-label">시간</span> <span class="ci-value">${escapeHtml(promiseTimeRangeLabel(p))}</span></div>
-          <div class="card-info-item"><i data-lucide="${p.penaltyType === 'vibrate' ? 'vibrate' : 'bell-ring'}"></i> <span class="ci-label">지각 벌칙</span> <span class="ci-value">${escapeHtml(penaltyLabel(p))}</span></div>
+          <div class="card-info-item"><i data-lucide="${p.penaltyType === 'vibrate' ? 'vibrate' : (p.penaltyType === 'gifticon' ? 'gift' : 'bell-ring')}"></i> <span class="ci-label">지각 벌칙</span> <span class="ci-value">${escapeHtml(penaltyLabel(p))}</span></div>
           <div class="card-info-item"><i data-lucide="eye"></i> <span class="ci-label">위치 공개</span> <span class="ci-value">${escapeHtml(locationRevealLabel(p))}</span></div>
           <div style="margin-top:6px;">
             <span style="font-size:0.75rem; color: var(--text-dim);">참가자:</span>
@@ -2471,6 +2480,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </div>
         ${mapButtonHtml}
+        ${gifticonButtonHtml}
         <div class="card-action-row" style="margin-top:6px;">
           ${leaveBtnHtml}
         </div>
@@ -2487,6 +2497,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const pId = e.currentTarget.getAttribute('data-id');
         const found = promisesList.find(item => item.id === pId);
         if (found) openLiveMapModal(found);
+      });
+    });
+
+    document.querySelectorAll('.btn-open-gifticon').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const pId = e.currentTarget.getAttribute('data-id');
+        const found = promisesList.find(item => item.id === pId);
+        if (found) openGifticonBoard(found);
       });
     });
 
@@ -3165,6 +3183,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (selectedInviteCodes.includes(code)) {
           selectedInviteCodes = selectedInviteCodes.filter(c => c !== code);
         } else {
+          if (selectedInviteCodes.length + 1 >= GIFTICON_MAX_PEOPLE) {
+            alert(`👥 약속 참가 인원은 나를 포함해 최대 ${GIFTICON_MAX_PEOPLE}명입니다.`);
+            return;
+          }
           selectedInviteCodes.push(code);
         }
         renderFriendPickerList();
@@ -3197,7 +3219,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (btnFriendPickerSelectAll) {
     btnFriendPickerSelectAll.addEventListener('click', () => {
-      selectedInviteCodes = friendsList.map(f => f.code || '').filter(Boolean);
+      selectedInviteCodes = friendsList
+        .map(f => f.code || '')
+        .filter(Boolean)
+        .slice(0, GIFTICON_MAX_PEOPLE - 1);
       renderFriendPickerList();
     });
   }
@@ -3224,6 +3249,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!hintEl || !typeEl || !durEl) return;
 
     const isVibrate = typeEl.value === 'vibrate';
+    if (typeEl.value === 'gifticon') {
+      hintEl.textContent = '약속 시간까지 도착하지 않으면 내 기프티콘의 코드 가림막이 벗겨지고, 참가자 전원에게 알림이 갑니다.';
+      return;
+    }
     const min = parseInt(durEl.value, 10) || 0;
     const what = isVibrate ? '진동' : '알람 소리';
     const when = min > 0
@@ -3242,7 +3271,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ------------------------------------------
   // 벌칙 선택 UI (타일 + 칩)
   //  - 실제 값은 hidden input(selectPenaltyType / selectPenaltyDuration)에 반영한다.
-  //  - 기프티콘 벌칙은 준비 중이라 선택되지 않고 안내만 띄운다.
+  //  - 기프티콘을 고르면 지속 시간 대신 기프티콘 등록 버튼이 나온다.
   // ------------------------------------------
   const penaltyTypeGridEl = document.getElementById('penaltyTypeGrid');
   const penaltyDurChipsEl = document.getElementById('penaltyDurationChips');
@@ -3258,20 +3287,32 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  function applyPenaltyTypeUi(type) {
+    const durBlock = document.getElementById('penaltyDurationBlock');
+    const giftBlock = document.getElementById('penaltyGifticonBlock');
+    const isGift = type === 'gifticon';
+    if (durBlock) durBlock.hidden = isGift;
+    if (giftBlock) giftBlock.hidden = !isGift;
+    updateGifticonStatusBadge();
+  }
+
   if (penaltyTypeGridEl) {
     penaltyTypeGridEl.addEventListener('click', (e) => {
       const tile = e.target.closest('.penalty-tile');
       if (!tile) return;
 
-      if (tile.classList.contains('is-locked')) {
-        alert('🎁 기프티콘 벌칙은 아직 사용할 수 없습니다.\n\n준비 중인 기능이에요. 지금은 알람 또는 진동 벌칙을 선택해 주세요.');
-        return;
-      }
-
-      const type = tile.getAttribute('data-penalty') === 'vibrate' ? 'vibrate' : 'alarm';
+      const raw = tile.getAttribute('data-penalty');
+      const type = raw === 'vibrate' ? 'vibrate' : (raw === 'gifticon' ? 'gifticon' : 'alarm');
       if (penaltyTypeValueEl) penaltyTypeValueEl.value = type;
       markPenaltyChoice(penaltyTypeGridEl, tile, 'is-active');
+      applyPenaltyTypeUi(type);
       updatePenaltyHint();
+
+      // 기프티콘을 고르면 바로 등록 창을 띄운다.
+      if (type === 'gifticon' && !pendingGifticon) {
+        if (createPromiseModal) createPromiseModal.classList.remove('active');
+        openGifticonUploadModal({ mode: 'create' });
+      }
     });
   }
 
@@ -3367,7 +3408,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const revealEl = document.getElementById('selectLocationReveal');
       const locationRevealMin = revealEl ? (parseInt(revealEl.value, 10) || 0) : 0;
       const penaltySelectEl = document.getElementById('selectPenaltyType');
-      const penaltyType = penaltySelectEl && penaltySelectEl.value === 'vibrate' ? 'vibrate' : 'alarm';
+      const penaltyRaw = penaltySelectEl ? penaltySelectEl.value : 'alarm';
+      const penaltyType = penaltyRaw === 'vibrate' ? 'vibrate' : (penaltyRaw === 'gifticon' ? 'gifticon' : 'alarm');
       const penaltyDurationEl = document.getElementById('selectPenaltyDuration');
       const penaltyDurationMin = penaltyDurationEl ? (parseInt(penaltyDurationEl.value, 10) || 0) : 0;
       const arrivalRadiusMeters = parseInt(document.getElementById('inputAutoArrivalDist').value) || 200;
@@ -3408,9 +3450,17 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
+      if (penaltyType === 'gifticon' && !pendingGifticon) {
+        alert('🎁 기프티콘 벌칙을 선택하면 내 기프티콘을 먼저 등록해야 합니다.\n\n[기프티콘 등록] 버튼을 눌러 주세요.');
+        return;
+      }
+
       pruneSelectedInviteCodes();
-      const selectedFriendCodes = selectedInviteCodes.slice();
-      const invitedFriendObjs = friendsList.filter(f => selectedFriendCodes.indexOf(f.code || '') !== -1);
+      const selectedFriendCodes = selectedInviteCodes.slice();      const invitedFriendObjs = friendsList.filter(f => selectedFriendCodes.indexOf(f.code || '') !== -1);
+      if (invitedFriendObjs.length + 1 > GIFTICON_MAX_PEOPLE) {
+        alert(`👥 약속 참가 인원은 나를 포함해 최대 ${GIFTICON_MAX_PEOPLE}명입니다.\n\n현재 ${invitedFriendObjs.length + 1}명이 선택되었습니다.`);
+        return;
+      }
       const selectedFriendNames = invitedFriendObjs.map(f => f.name);
 
       const myName = userProfile ? userProfile.name : '나';
@@ -3472,6 +3522,10 @@ document.addEventListener('DOMContentLoaded', () => {
         } : {},
         // 읽기 권한의 기준: 여기 uid 가 있는 사람만 이 약속을 볼 수 있다.
         members: buildMembersMap(myUidForPromise, invitedFriendObjs),
+        // 기프티콘 벌칙: 각자 자기 uid 노드에만 자기 기프티콘을 올린다.
+        gifticons: (penaltyType === 'gifticon' && myUidForPromise && pendingGifticon)
+          ? { [myUidForPromise]: pendingGifticon }
+          : {},
         createdAt: Date.now()
       };
 
@@ -3491,6 +3545,8 @@ document.addEventListener('DOMContentLoaded', () => {
       markActiveDurationChip(-1);
       selectedInviteCodes = [];
       populateFriendSelector();
+      pendingGifticon = null;
+      updateGifticonStatusBadge();
       createPromiseModal.classList.remove('active');
       renderAll();
       alert(`🎉 "${title}" 약속이 등록되었으며, 선택한 친구들에게 초대가 전송되었습니다!`);
@@ -3584,6 +3640,554 @@ document.addEventListener('DOMContentLoaded', () => {
     if (okBtn) okBtn.addEventListener('click', hideArrivalOverlay);
 
     if (navigator.vibrate) { try { navigator.vibrate([120, 80, 120]); } catch (e) {} }
+  }
+
+  // ==========================================
+  // 7-B. 기프티콘 벌칙
+  //   - 등록 시 AI(Gemini)로 진짜 기프티콘인지 검증하고 코드(바코드/QR) 위치를 받는다.
+  //   - 코드 부분은 검은 줄로 가린 이미지를 만들어 모든 참가자에게 공개한다.
+  //   - 지각하면 본인 기기가 revealed=true 를 기록하고, 모든 참가자에게 알림이 간다.
+  // ==========================================
+  const GIFTICON_MAX_W = 900;              // 업로드 이미지 최대 가로 크기
+  const GIFTICON_JPEG_Q = 0.72;
+  const GIFTICON_MAX_PEOPLE = 10;          // 약속 참가 인원 상한
+  const GEMINI_MODEL = 'gemini-2.0-flash';
+
+  let pendingGifticon = null;              // 약속 만들기에서 등록한(아직 저장 전) 기프티콘
+  let gifticonUploadContext = null;        // { mode: 'create' | 'promise', promiseId }
+  let gifticonWorking = null;              // 현재 모달에서 다루는 검증 결과
+  let gifticonRevealNotified = loadStorage('pa_gifticon_reveal_notified', []);
+
+  function geminiApiKey(askIfMissing) {
+    let key = '';
+    try { key = localStorage.getItem('pa_gemini_key') || ''; } catch (e) { key = ''; }
+    if (!key && askIfMissing) {
+      const input = prompt('🤖 기프티콘 진위 확인에 사용할 Google AI Studio(Gemini) API 키를 입력해 주세요.\n\nhttps://aistudio.google.com/apikey 에서 무료로 발급할 수 있습니다.\n비워두면 AI 검증 없이 자동 코드 인식만 사용합니다.');
+      if (input && input.trim()) {
+        key = input.trim();
+        try { localStorage.setItem('pa_gemini_key', key); } catch (e) {}
+      }
+    }
+    return key;
+  }
+
+  // 업로드 이미지를 적당한 크기의 JPEG 로 줄인다. (DB 용량 절약)
+  function loadImageFromDataUrl(dataUrl) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('이미지를 읽을 수 없습니다.'));
+      img.src = dataUrl;
+    });
+  }
+
+  async function normalizeGifticonImage(dataUrl) {
+    const img = await loadImageFromDataUrl(dataUrl);
+    const scale = Math.min(1, GIFTICON_MAX_W / (img.naturalWidth || img.width));
+    const w = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
+    const h = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+    return { dataUrl: canvas.toDataURL('image/jpeg', GIFTICON_JPEG_Q), width: w, height: h };
+  }
+
+  // 바코드/QR 위치 자동 추정: 가로 방향 명암 전환이 급격한 구간을 찾는다.
+  async function detectCodeBoxHeuristic(dataUrl) {
+    try {
+      const img = await loadImageFromDataUrl(dataUrl);
+      const w = 220;
+      const h = Math.max(1, Math.round((img.naturalHeight || img.height) * (w / (img.naturalWidth || img.width))));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      const data = ctx.getImageData(0, 0, w, h).data;
+
+      const gray = (x, y) => {
+        const i = (y * w + x) * 4;
+        return (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
+      };
+
+      const rowScore = new Array(h).fill(0);
+      for (let y = 0; y < h; y += 1) {
+        let transitions = 0;
+        for (let x = 1; x < w; x += 1) {
+          if (Math.abs(gray(x, y) - gray(x - 1, y)) > 55) transitions += 1;
+        }
+        rowScore[y] = transitions;
+      }
+
+      const threshold = Math.max(12, w * 0.08);
+      let best = null;
+      let start = -1;
+      for (let y = 0; y <= h; y += 1) {
+        const on = y < h && rowScore[y] >= threshold;
+        if (on && start < 0) start = y;
+        if (!on && start >= 0) {
+          const band = { top: start, bottom: y - 1 };
+          const height = band.bottom - band.top + 1;
+          if (height >= Math.max(4, h * 0.03) && (!best || height > best.bottom - best.top + 1)) best = band;
+          start = -1;
+        }
+      }
+      if (!best) return null;
+
+      // 밴드 내 좌우 범위
+      let minX = w;
+      let maxX = 0;
+      for (let y = best.top; y <= best.bottom; y += 1) {
+        for (let x = 1; x < w; x += 1) {
+          if (Math.abs(gray(x, y) - gray(x - 1, y)) > 55) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+          }
+        }
+      }
+      if (maxX <= minX) return null;
+
+      const pad = 0.02;
+      return {
+        x: Math.max(0, minX / w - pad),
+        y: Math.max(0, best.top / h - pad),
+        w: Math.min(1, (maxX - minX) / w + pad * 2),
+        h: Math.min(1, (best.bottom - best.top + 1) / h + pad * 2),
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function verifyGifticonWithAI(dataUrl) {
+    const key = geminiApiKey(true);
+    if (!key) return null;
+
+    const base64 = String(dataUrl).split(',')[1] || '';
+    const mime = (String(dataUrl).match(/^data:(.*?);/) || [])[1] || 'image/jpeg';
+    const promptText = [
+      '이 이미지가 실제 사용 가능한 모바일 상품권(기프티콘) 캡처인지 판정해라.',
+      '판정 기준: 브랜드/상품명, 유효기간, 교환용 바코드 또는 QR 코드가 함께 보이면 기프티콘이다.',
+      '단순 상품 사진, 스크린샷이 아닌 합성/그림, 코드가 없는 이미지는 기프티콘이 아니다.',
+      '바코드/QR 코드 영역의 위치를 이미지 크기에 대한 0~1 비율로 알려줘라.',
+      'JSON 만 출력: {"isGifticon":true/false,"confidence":0~1,"brand":"","item":"","expiry":"","codeType":"barcode|qr|none","codeBox":{"x":0,"y":0,"w":0,"h":0},"reason":""}',
+    ].join('\n');
+
+    const body = {
+      contents: [{
+        parts: [
+          { text: promptText },
+          { inline_data: { mime_type: mime, data: base64 } },
+        ],
+      }],
+      generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+    };
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(key)}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const msg = await res.text().catch(() => '');
+      throw new Error(`AI 검증 실패 (${res.status}) ${msg.slice(0, 160)}`);
+    }
+    const json = await res.json();
+    const text = (((json.candidates || [])[0] || {}).content || {}).parts;
+    const raw = Array.isArray(text) ? text.map((p) => p.text || '').join('') : '';
+    const cleaned = raw.replace(/```json|```/g, '').trim();
+    return JSON.parse(cleaned);
+  }
+
+  // 코드 영역을 검은 줄로 덮은 이미지를 만든다.
+  async function maskGifticonImage(dataUrl, box) {
+    const img = await loadImageFromDataUrl(dataUrl);
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    const b = box || { x: 0.06, y: 0.72, w: 0.88, h: 0.2 };
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(
+      Math.round(b.x * w),
+      Math.round(b.y * h),
+      Math.round(b.w * w),
+      Math.round(b.h * h)
+    );
+    return canvas.toDataURL('image/jpeg', GIFTICON_JPEG_Q);
+  }
+
+  function setGifticonVerifyBox(state, detail, cls) {
+    const box = document.getElementById('gifticonVerifyBox');
+    const stateEl = document.getElementById('gifticonVerifyState');
+    const detailEl = document.getElementById('gifticonVerifyDetail');
+    if (!box || !stateEl || !detailEl) return;
+    box.hidden = false;
+    box.classList.remove('is-ok', 'is-bad', 'is-warn');
+    if (cls) box.classList.add(cls);
+    stateEl.textContent = state;
+    detailEl.textContent = detail || '';
+  }
+
+  async function handleGifticonFile(file) {
+    const saveBtn = document.getElementById('btnSaveGifticon');
+    const previewWrap = document.getElementById('gifticonPreviewWrap');
+    const previewImg = document.getElementById('gifticonPreviewImg');
+    if (saveBtn) saveBtn.disabled = true;
+    gifticonWorking = null;
+
+    setGifticonVerifyBox('🤖 AI 검증 중...', '기프티콘이 맞는지 확인하고 코드 위치를 찾고 있습니다.', 'is-warn');
+
+    try {
+      const rawDataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => resolve(ev.target.result);
+        reader.onerror = () => reject(new Error('파일을 읽을 수 없습니다.'));
+        reader.readAsDataURL(file);
+      });
+
+      const normalized = await normalizeGifticonImage(rawDataUrl);
+
+      let ai = null;
+      let aiError = '';
+      try {
+        ai = await verifyGifticonWithAI(normalized.dataUrl);
+      } catch (e) {
+        aiError = e && e.message ? e.message : String(e);
+      }
+
+      const heuristicBox = await detectCodeBoxHeuristic(normalized.dataUrl);
+      const aiBox = ai && ai.codeBox && Number.isFinite(Number(ai.codeBox.w)) && Number(ai.codeBox.w) > 0.02
+        ? {
+          x: Math.max(0, Math.min(1, Number(ai.codeBox.x) || 0)),
+          y: Math.max(0, Math.min(1, Number(ai.codeBox.y) || 0)),
+          w: Math.max(0.05, Math.min(1, Number(ai.codeBox.w) || 0)),
+          h: Math.max(0.03, Math.min(1, Number(ai.codeBox.h) || 0)),
+        }
+        : null;
+      const box = aiBox || heuristicBox || { x: 0.06, y: 0.72, w: 0.88, h: 0.2 };
+
+      const maskedDataUrl = await maskGifticonImage(normalized.dataUrl, box);
+
+      if (previewWrap && previewImg) {
+        previewImg.src = maskedDataUrl;
+        previewWrap.hidden = false;
+      }
+
+      if (ai && ai.isGifticon === false) {
+        setGifticonVerifyBox(
+          '❌ 기프티콘이 아닌 것 같습니다',
+          `${ai.reason || 'AI가 상품권으로 인정하지 않았습니다.'} 다른 이미지를 올려 주세요.`,
+          'is-bad'
+        );
+        return;
+      }
+
+      const label = ai
+        ? `AI 검증 완료 · ${[ai.brand, ai.item].filter(Boolean).join(' ') || '상품권'}${ai.expiry ? ` · 유효기간 ${ai.expiry}` : ''}`
+        : (aiError
+          ? `AI 검증을 건너뛰었습니다 (${aiError})`
+          : 'AI 키가 없어 자동 코드 인식만 수행했습니다.');
+
+      setGifticonVerifyBox(
+        ai ? '✅ 기프티콘으로 확인되었습니다' : '⚠️ 코드만 가렸습니다',
+        `${label} · 코드 부분은 검은 줄로 가려집니다. 지각하면 이 줄이 벗겨집니다.`,
+        ai ? 'is-ok' : 'is-warn'
+      );
+
+      gifticonWorking = {
+        imageFull: normalized.dataUrl,
+        imageMasked: maskedDataUrl,
+        maskBox: box,
+        verified: !!ai,
+        aiConfidence: ai && Number.isFinite(Number(ai.confidence)) ? Number(ai.confidence) : null,
+        brand: (ai && ai.brand) || '',
+        item: (ai && ai.item) || '',
+        expiry: (ai && ai.expiry) || '',
+        codeType: (ai && ai.codeType) || (heuristicBox ? 'barcode' : 'none'),
+      };
+      if (saveBtn) saveBtn.disabled = false;
+    } catch (e) {
+      setGifticonVerifyBox('❌ 처리 실패', e && e.message ? e.message : String(e), 'is-bad');
+    }
+  }
+
+  function gifticonRecordFromWorking() {
+    const myUid = ensureProfileUid() || '';
+    return {
+      uid: myUid,
+      name: userProfile ? userProfile.name : '나',
+      avatar: (userProfile && userProfile.avatar) || DEFAULT_AVATAR,
+      imageMasked: gifticonWorking.imageMasked,
+      imageFull: gifticonWorking.imageFull,
+      maskBox: gifticonWorking.maskBox,
+      verified: gifticonWorking.verified,
+      brand: gifticonWorking.brand,
+      item: gifticonWorking.item,
+      expiry: gifticonWorking.expiry,
+      codeType: gifticonWorking.codeType,
+      uploadedAt: Date.now(),
+      revealed: false,
+    };
+  }
+
+  function openGifticonUploadModal(context) {
+    gifticonUploadContext = context || { mode: 'create' };
+    gifticonWorking = null;
+    const modal = document.getElementById('gifticonUploadModal');
+    const previewWrap = document.getElementById('gifticonPreviewWrap');
+    const verifyBox = document.getElementById('gifticonVerifyBox');
+    const fileInput = document.getElementById('inputGifticonFile');
+    const saveBtn = document.getElementById('btnSaveGifticon');
+    if (!modal) return;
+    if (previewWrap) previewWrap.hidden = true;
+    if (verifyBox) verifyBox.hidden = true;
+    if (fileInput) fileInput.value = '';
+    if (saveBtn) saveBtn.disabled = true;
+    modal.classList.add('active');
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  function closeGifticonUploadModal() {
+    const modal = document.getElementById('gifticonUploadModal');
+    if (modal) modal.classList.remove('active');
+    if (gifticonUploadContext && gifticonUploadContext.mode === 'create' && createPromiseModal) {
+      createPromiseModal.classList.add('active');
+    }
+    if (gifticonUploadContext && gifticonUploadContext.mode === 'promise') {
+      const board = document.getElementById('gifticonBoardModal');
+      if (board) board.classList.add('active');
+    }
+  }
+
+  function updateGifticonStatusBadge() {
+    const badge = document.getElementById('gifticonStatusBadge');
+    if (badge) badge.textContent = pendingGifticon ? '등록 완료' : '미등록';
+  }
+
+  function myGifticonOf(promiseObj) {
+    const myUid = ensureProfileUid();
+    if (!myUid || !promiseObj || !promiseObj.gifticons) return null;
+    return promiseObj.gifticons[myUid] || null;
+  }
+
+  function saveMyGifticonToPromise(promiseObj, record) {
+    const myUid = ensureProfileUid();
+    if (!promiseObj || !promiseObj.id || !myUid) return;
+    promiseObj.gifticons = promiseObj.gifticons || {};
+    promiseObj.gifticons[myUid] = record;
+    saveStorage('pa_promises_list', promisesList);
+    dbWrite('promises/' + promiseObj.id + '/gifticons/' + myUid, record);
+  }
+
+  // ------------------------------------------
+  // 기프티콘 보드 (약속별 확인 창)
+  // ------------------------------------------
+  let gifticonBoardPromiseId = null;
+  const gifticonPeeled = [];        // 벗겨지는 연출을 이미 재생한 카드
+
+  function promiseAttendeeList(promiseObj) {
+    const map = (promiseObj && promiseObj.attendees) || {};
+    return Object.keys(map)
+      .map((uid) => map[uid])
+      .filter(Boolean)
+      .sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0))
+      .slice(0, GIFTICON_MAX_PEOPLE);
+  }
+
+  function renderGifticonBoard() {
+    const board = document.getElementById('gifticonBoard');
+    const titleEl = document.getElementById('gifticonBoardTitle');
+    const promiseObj = promisesList.find((p) => p.id === gifticonBoardPromiseId);
+    if (!board || !promiseObj) return;
+
+    if (titleEl) titleEl.textContent = `🎁 ${promiseObj.title} 기프티콘`;
+
+    const attendees = promiseAttendeeList(promiseObj);
+    const gifticons = promiseObj.gifticons || {};
+    board.setAttribute('data-count', String(attendees.length));
+    board.innerHTML = '';
+
+    attendees.forEach((a) => {
+      const g = gifticons[a.uid];
+      const card = document.createElement('div');
+      card.className = `gifticon-card${g && g.revealed ? ' is-revealed' : ''}`;
+
+      let bodyHtml = `<div class="gifticon-card-empty">아직 기프티콘을<br>등록하지 않았습니다</div>`;
+      if (g && (g.imageMasked || g.imageFull)) {
+        if (g.revealed && g.imageFull) {
+          // 공개: 원본을 보여주면서 코드 위 검은 줄이 벗겨지는 연출
+          const b = g.maskBox || { x: 0.06, y: 0.72, w: 0.88, h: 0.2 };
+          const key = `${promiseObj.id}:${a.uid}`;
+          const peel = gifticonPeeled.indexOf(key) === -1;
+          if (peel) gifticonPeeled.push(key);
+          if (peel) card.classList.add('is-peeling');
+          bodyHtml = `
+            <img src="${safeImageUrl(g.imageFull)}" alt="${escapeHtml(a.name)} 기프티콘" loading="lazy">
+            ${peel ? `<span class="gifticon-card-mask" style="left:${(b.x * 100).toFixed(2)}%; top:${(b.y * 100).toFixed(2)}%; width:${(b.w * 100).toFixed(2)}%; height:${(b.h * 100).toFixed(2)}%;"></span>` : ''}
+          `;
+        } else {
+          bodyHtml = `<img src="${safeImageUrl(g.imageMasked || g.imageFull)}" alt="${escapeHtml(a.name)} 기프티콘" loading="lazy">`;
+        }
+      }
+
+      const badge = !g
+        ? '미등록'
+        : (g.revealed ? '공개됨' : (g.verified ? 'AI 확인' : '등록됨'));
+      const footText = g
+        ? (g.revealed
+          ? '지각으로 코드가 공개되었습니다.'
+          : `${[g.brand, g.item].filter(Boolean).join(' ') || '상품권'} · 코드 가림`)
+        : '';
+
+      card.innerHTML = `
+        <div class="gifticon-card-head">
+          <img src="${safeImageUrl(a.avatar)}" alt="">
+          <span class="gifticon-card-name">${escapeHtml(a.name)}</span>
+          <span class="gifticon-card-badge">${escapeHtml(badge)}</span>
+        </div>
+        <div class="gifticon-card-body">${bodyHtml}</div>
+        ${footText ? `<div class="gifticon-card-foot">${escapeHtml(footText)}</div>` : ''}
+      `;
+      board.appendChild(card);
+    });
+
+    if (attendees.length === 0) {
+      board.innerHTML = `<p style="color:var(--text-dim); text-align:center; padding:24px 12px; font-size:0.84rem;">참가자가 없습니다.</p>`;
+    }
+  }
+
+  function openGifticonBoard(promiseObj) {
+    gifticonBoardPromiseId = promiseObj.id;
+    const modal = document.getElementById('gifticonBoardModal');
+    if (!modal) return;
+    modal.classList.add('active');
+    renderGifticonBoard();
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  // ------------------------------------------
+  // 지각 → 내 기프티콘 코드 공개
+  // ------------------------------------------
+  function isGifticonRevealDue(p) {
+    if (!p || p.penaltyType !== 'gifticon') return false;
+    if (!amIAttendeeOf(p)) return false;
+    if (arrivedNotified.includes(p.id)) return false;
+    const target = Number(p.targetTimestamp);
+    if (!Number.isFinite(target) || Date.now() < target) return false;
+    const mine = myGifticonOf(p);
+    return !!(mine && !mine.revealed);
+  }
+
+  function revealMyGifticonIfLate() {
+    promisesList.forEach((p) => {
+      if (!isGifticonRevealDue(p)) return;
+      const myUid = ensureProfileUid();
+      const mine = myGifticonOf(p);
+      if (!myUid || !mine) return;
+      mine.revealed = true;
+      mine.revealedAt = Date.now();
+      saveStorage('pa_promises_list', promisesList);
+      dbWrite('promises/' + p.id + '/gifticons/' + myUid, mine);
+    });
+  }
+
+  // 누군가의 기프티콘이 공개되면 모든 참가자에게 1회 알린다.
+  function checkGifticonRevealNotices() {
+    let changed = false;
+    promisesList.forEach((p) => {
+      if (!p || p.penaltyType !== 'gifticon' || !p.gifticons) return;
+      if (!amIAttendeeOf(p)) return;
+      Object.keys(p.gifticons).forEach((uid) => {
+        const g = p.gifticons[uid];
+        if (!g || !g.revealed) return;
+        const key = `${p.id}:${uid}`;
+        if (gifticonRevealNotified.includes(key)) return;
+        gifticonRevealNotified.push(key);
+        changed = true;
+
+        const who = g.name || '참가자';
+        showReminderToast(`${who}님 기프티콘이 공개되었습니다`, `${p.title} · 지각으로 코드가 공개되었습니다.`, 'now');
+        showSystemNotification(`🎁 ${who}님 기프티콘이 공개되었습니다`, `${p.title} · 지각으로 코드가 공개되었습니다.`, `gifticon-${key}`);
+      });
+    });
+    if (changed) {
+      // 기록이 무한정 커지지 않게 최근 200건만 유지
+      if (gifticonRevealNotified.length > 200) gifticonRevealNotified = gifticonRevealNotified.slice(-200);
+      saveStorage('pa_gifticon_reveal_notified', gifticonRevealNotified);
+      if (gifticonBoardPromiseId) renderGifticonBoard();
+    }
+  }
+
+  // ------------------------------------------
+  // 기프티콘 모달 이벤트 연결
+  // ------------------------------------------
+  const inputGifticonFileEl = document.getElementById('inputGifticonFile');
+  if (inputGifticonFileEl) {
+    inputGifticonFileEl.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) handleGifticonFile(file);
+    });
+  }
+
+  const btnOpenGifticonUploadEl = document.getElementById('btnOpenGifticonUpload');
+  if (btnOpenGifticonUploadEl) {
+    btnOpenGifticonUploadEl.addEventListener('click', () => {
+      if (createPromiseModal) createPromiseModal.classList.remove('active');
+      openGifticonUploadModal({ mode: 'create' });
+    });
+  }
+
+  const btnCloseGifticonUploadEl = document.getElementById('btnCloseGifticonUpload');
+  if (btnCloseGifticonUploadEl) btnCloseGifticonUploadEl.addEventListener('click', closeGifticonUploadModal);
+  const btnCancelGifticonEl = document.getElementById('btnCancelGifticon');
+  if (btnCancelGifticonEl) btnCancelGifticonEl.addEventListener('click', closeGifticonUploadModal);
+
+  const btnSaveGifticonEl = document.getElementById('btnSaveGifticon');
+  if (btnSaveGifticonEl) {
+    btnSaveGifticonEl.addEventListener('click', () => {
+      if (!gifticonWorking) return;
+      const ctx = gifticonUploadContext || { mode: 'create' };
+
+      if (ctx.mode === 'promise') {
+        const target = promisesList.find((p) => p.id === ctx.promiseId);
+        if (target) {
+          saveMyGifticonToPromise(target, gifticonRecordFromWorking());
+          closeGifticonUploadModal();
+          renderGifticonBoard();
+          alert('🎁 기프티콘이 등록되었습니다. 코드 부분은 가려진 상태로 참가자에게 공개됩니다.');
+          return;
+        }
+      }
+
+      pendingGifticon = gifticonRecordFromWorking();
+      updateGifticonStatusBadge();
+      closeGifticonUploadModal();
+    });
+  }
+
+  const btnCloseGifticonBoardEl = document.getElementById('btnCloseGifticonBoard');
+  if (btnCloseGifticonBoardEl) {
+    btnCloseGifticonBoardEl.addEventListener('click', () => {
+      const modal = document.getElementById('gifticonBoardModal');
+      if (modal) modal.classList.remove('active');
+      gifticonBoardPromiseId = null;
+    });
+  }
+
+  const btnBoardUploadMineEl = document.getElementById('btnBoardUploadMine');
+  if (btnBoardUploadMineEl) {
+    btnBoardUploadMineEl.addEventListener('click', () => {
+      if (!gifticonBoardPromiseId) return;
+      const modal = document.getElementById('gifticonBoardModal');
+      if (modal) modal.classList.remove('active');
+      openGifticonUploadModal({ mode: 'promise', promiseId: gifticonBoardPromiseId });
+    });
   }
 
   // ==========================================
@@ -3738,6 +4342,10 @@ document.addEventListener('DOMContentLoaded', () => {
   function evaluatePenaltyState() {
     // 네이티브 앱이면 OS 알람도 함께 예약해둔다. (앱이 닫혀 있어도 울리게)
     syncNativeAlarms();
+
+    // 기프티콘 벌칙: 지각하면 내 코드가 공개되고, 참가자 전원에게 알림이 간다.
+    revealMyGifticonIfLate();
+    checkGifticonRevealNotices();
 
     // 정각이 가장 먼저 지난 약속 1건만 울린다.
     const due = promisesList

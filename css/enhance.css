@@ -1009,6 +1009,236 @@ html[data-theme='dark'] {
 
 
 /* ==========================================================================
+   N+4. 기프티콘 벌칙 (등록 / 보드)
+   ========================================================================== */
+.modal-box-wide {
+  max-width: 720px;
+}
+
+.gifticon-guide {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+}
+
+.gifticon-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 26px 16px;
+  border: 1.5px dashed var(--border);
+  border-radius: 16px;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.gifticon-drop:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.gifticon-drop i {
+  width: 28px;
+  height: 28px;
+}
+
+.gifticon-preview-wrap {
+  margin-top: 12px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.gifticon-preview-wrap img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.gifticon-verify-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(127, 127, 127, 0.12);
+}
+
+.gifticon-verify-state {
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.gifticon-verify-box.is-ok .gifticon-verify-state { color: #22c55e; }
+.gifticon-verify-box.is-bad .gifticon-verify-state { color: #ef4444; }
+.gifticon-verify-box.is-warn .gifticon-verify-state { color: #f59e0b; }
+
+.gifticon-verify-detail {
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/* 참가자 기프티콘 보드 — 인원 수에 따라 칸 수와 크기가 바뀐다 */
+.gifticon-board {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* 1~2명: 한 줄에 하나씩 크게 */
+.gifticon-board[data-count="1"],
+.gifticon-board[data-count="2"] {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+}
+
+/* 3~4명: 2열, 널널하게 */
+.gifticon-board[data-count="3"],
+.gifticon-board[data-count="4"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+/* 5~6명: 3열 */
+.gifticon-board[data-count="5"],
+.gifticon-board[data-count="6"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* 7~10명: 4열, 촘촘하게 */
+.gifticon-board[data-count="7"],
+.gifticon-board[data-count="8"],
+.gifticon-board[data-count="9"],
+.gifticon-board[data-count="10"] {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 520px) {
+  .gifticon-board,
+  .gifticon-board[data-count="5"],
+  .gifticon-board[data-count="6"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .gifticon-board[data-count="1"],
+  .gifticon-board[data-count="2"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .gifticon-board[data-count="7"],
+  .gifticon-board[data-count="8"],
+  .gifticon-board[data-count="9"],
+  .gifticon-board[data-count="10"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+}
+
+.gifticon-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--card-bg, rgba(127, 127, 127, 0.08));
+  border: 1px solid var(--border);
+}
+
+.gifticon-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.gifticon-card-head img {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.gifticon-card-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gifticon-card-badge {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 800;
+  background: rgba(127, 127, 127, 0.18);
+  color: var(--text-muted);
+}
+
+.gifticon-card.is-revealed .gifticon-card-badge {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.gifticon-card-body {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.gifticon-card-body img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.gifticon-card-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 10px;
+  text-align: center;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+/* 코드 위 검은 줄이 벗겨지는 연출 */
+@keyframes gifticonPeel {
+  from { transform: scaleX(1); opacity: 1; }
+  to { transform: scaleX(0); opacity: 0; }
+}
+
+.gifticon-card.is-peeling .gifticon-card-mask {
+  transform-origin: left center;
+  animation: gifticonPeel 0.9s ease forwards;
+}
+
+.gifticon-card-mask {
+  position: absolute;
+  background: #000000;
+  border-radius: 2px;
+}
+
+.gifticon-card-foot {
+  padding: 7px 10px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+}
+
+
+/* ==========================================================================
    N+3. 도착! 전체 화면 알림
    ========================================================================== */
 .arrival-overlay {

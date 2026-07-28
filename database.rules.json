@@ -73,6 +73,13 @@
             ".write": "auth != null && $memberUid === auth.uid && root.child('promises').child($promiseId).child('members').child(auth.uid).exists()",
             ".validate": "!newData.exists() || (newData.hasChildren(['uid', 'name']) && newData.child('uid').val() === $memberUid && newData.child('name').isString())"
           }
+        },
+
+        "gifticons": {
+          "$memberUid": {
+            ".write": "auth != null && $memberUid === auth.uid && root.child('promises').child($promiseId).child('members').child(auth.uid).exists()",
+            ".validate": "!newData.exists() || (newData.hasChildren(['uid', 'name', 'imageMasked']) && newData.child('uid').val() === $memberUid && newData.child('name').isString() && newData.child('imageMasked').isString() && newData.child('imageMasked').val().length < 4000000)"
+          }
         }
       }
     },

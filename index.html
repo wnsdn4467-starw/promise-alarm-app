@@ -528,23 +528,33 @@
               <span class="penalty-tile-emoji" aria-hidden="true">📳</span>
               <strong>진동</strong>
             </button>
-            <button type="button" class="penalty-tile is-locked" data-penalty="gifticon" role="radio" aria-checked="false" aria-disabled="true">
+            <button type="button" class="penalty-tile" data-penalty="gifticon" role="radio" aria-checked="false">
               <span class="penalty-tile-emoji" aria-hidden="true">🎁</span>
               <strong>기프티콘</strong>
-              <span class="penalty-tile-desc">준비 중</span>
-              <span class="penalty-tile-lock" aria-hidden="true"><i data-lucide="lock"></i></span>
             </button>
           </div>
 
-          <span class="form-field-label">벌칙 지속 시간</span>
-          <div class="penalty-dur-chips" id="penaltyDurationChips" role="radiogroup" aria-label="벌칙 지속 시간">
-            <button type="button" class="penalty-chip is-active" data-min="0" role="radio" aria-checked="true">도착할 때까지</button>
-            <button type="button" class="penalty-chip" data-min="1" role="radio" aria-checked="false">1분</button>
-            <button type="button" class="penalty-chip" data-min="3" role="radio" aria-checked="false">3분</button>
-            <button type="button" class="penalty-chip" data-min="5" role="radio" aria-checked="false">5분</button>
-            <button type="button" class="penalty-chip" data-min="10" role="radio" aria-checked="false">10분</button>
-            <button type="button" class="penalty-chip" data-min="30" role="radio" aria-checked="false">30분</button>
-            <button type="button" class="penalty-chip" data-min="60" role="radio" aria-checked="false">60분</button>
+          <div id="penaltyDurationBlock">
+            <span class="form-field-label">벌칙 지속 시간</span>
+            <div class="penalty-dur-chips" id="penaltyDurationChips" role="radiogroup" aria-label="벌칙 지속 시간">
+              <button type="button" class="penalty-chip is-active" data-min="0" role="radio" aria-checked="true">도착할 때까지</button>
+              <button type="button" class="penalty-chip" data-min="1" role="radio" aria-checked="false">1분</button>
+              <button type="button" class="penalty-chip" data-min="3" role="radio" aria-checked="false">3분</button>
+              <button type="button" class="penalty-chip" data-min="5" role="radio" aria-checked="false">5분</button>
+              <button type="button" class="penalty-chip" data-min="10" role="radio" aria-checked="false">10분</button>
+              <button type="button" class="penalty-chip" data-min="30" role="radio" aria-checked="false">30분</button>
+              <button type="button" class="penalty-chip" data-min="60" role="radio" aria-checked="false">60분</button>
+            </div>
+          </div>
+
+          <div id="penaltyGifticonBlock" hidden>
+            <span class="form-field-label">내 기프티콘</span>
+            <button type="button" class="btn-secondary full-width" id="btnOpenGifticonUpload" style="justify-content:space-between;">
+              <span style="display:flex; align-items:center; gap:6px;">
+                <i data-lucide="gift" style="width:16px;height:16px;"></i> 기프티콘 등록
+              </span>
+              <span id="gifticonStatusBadge" style="font-size:0.78rem; color:var(--primary); font-weight:800;">미등록</span>
+            </button>
           </div>
 
           <span id="penaltyHintText" class="form-section-hint" hidden></span>
@@ -600,8 +610,59 @@
     </div>
   </div>
 
-  <!-- 5-2. THEME SETTINGS MODAL -->
-  <div class="modal-backdrop" id="themeModal">
+  <!-- 5-3. GIFTICON UPLOAD MODAL (AI 검증) -->
+  <div class="modal-backdrop" id="gifticonUploadModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>🎁 기프티콘 등록</h3>
+        <button class="btn-close" id="btnCloseGifticonUpload"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body">
+        <p class="gifticon-guide">
+          지각하면 이 기프티콘의 <strong>바코드가 공개</strong>됩니다.
+          등록하면 코드 부분은 검은 줄로 가려진 상태로 모든 참가자에게 보입니다.
+        </p>
+
+        <label class="gifticon-drop" for="inputGifticonFile" id="gifticonDropLabel">
+          <input type="file" id="inputGifticonFile" accept="image/*" hidden>
+          <i data-lucide="image-plus"></i>
+          <span>기프티콘 이미지 선택</span>
+        </label>
+
+        <div class="gifticon-preview-wrap" id="gifticonPreviewWrap" hidden>
+          <img id="gifticonPreviewImg" alt="기프티콘 미리보기">
+        </div>
+
+        <div class="gifticon-verify-box" id="gifticonVerifyBox" hidden>
+          <span class="gifticon-verify-state" id="gifticonVerifyState">검증 중...</span>
+          <span class="gifticon-verify-detail" id="gifticonVerifyDetail"></span>
+        </div>
+
+        <div class="modal-foot">
+          <button type="button" class="btn-secondary" id="btnCancelGifticon">취소</button>
+          <button type="button" class="btn-primary" id="btnSaveGifticon" disabled>등록하기</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5-4. GIFTICON BOARD MODAL (약속별 기프티콘 확인) -->
+  <div class="modal-backdrop" id="gifticonBoardModal">
+    <div class="modal-box modal-box-wide">
+      <div class="modal-head">
+        <h3 id="gifticonBoardTitle">🎁 기프티콘</h3>
+        <button class="btn-close" id="btnCloseGifticonBoard"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="gifticon-board" id="gifticonBoard" data-count="0"></div>
+        <div class="modal-foot">
+          <button type="button" class="btn-secondary" id="btnBoardUploadMine">내 기프티콘 등록/변경</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5-2. THEME SETTINGS MODAL -->  <div class="modal-backdrop" id="themeModal">
     <div class="modal-box">
       <div class="modal-head">
         <h3>테마 설정</h3>
