@@ -647,6 +647,33 @@ document.addEventListener('DOMContentLoaded', () => {
     return Array.isArray(promiseObj && promiseObj.participants) ? promiseObj.participants : [];
   }
 
+  // 참가자 이름표: 프로필 사진 + 이름, 도착한 사람은 초록색으로 표시한다.
+  function participantPillsHtml(promiseObj, fallbackNames) {
+    const attendees = promiseAttendees(promiseObj);
+
+    if (attendees.length > 0) {
+      return attendees.map((a) => {
+        const arrived = !!a.arrived;
+        const avatar = a.avatar || DEFAULT_AVATAR;
+        return `
+          <span class="friend-pill participant-pill${arrived ? ' is-arrived' : ''}" title="${escapeHtml(a.name)}${arrived ? ' · 도착' : ''}">
+            <img class="participant-pill-avatar" src="${escapeHtml(avatar)}" alt="" loading="lazy">
+            <span class="participant-pill-name">${escapeHtml(a.name)}</span>
+            ${arrived ? '<span class="participant-pill-check" aria-label="도착">✓</span>' : ''}
+          </span>
+        `;
+      }).join('');
+    }
+
+    // 구버전 약속(attendees 없음): 이름만 표시
+    return (fallbackNames || []).map((name) => `
+      <span class="friend-pill participant-pill">
+        <img class="participant-pill-avatar" src="${escapeHtml(DEFAULT_AVATAR)}" alt="" loading="lazy">
+        <span class="participant-pill-name">${escapeHtml(name)}</span>
+      </span>
+    `).join('');
+  }
+
   function amIHostOf(promiseObj) {
     const myUid = ensureProfileUid();
     return !!(myUid && promiseObj && promiseObj.hostUid === myUid);
@@ -2389,7 +2416,7 @@ document.addEventListener('DOMContentLoaded', () => {
       card.className = 'card-item';
 
       const participantsList = promiseParticipantNames(p).length > 0 ? promiseParticipantNames(p) : [myName];
-      const friendPills = participantsList.map(name => `<span class="friend-pill">${escapeHtml(name)}</span>`).join('');
+      const friendPills = participantPillsHtml(p, participantsList);
       const isHostOfThis = amIHostOf(p);
 
 
@@ -3213,6 +3240,53 @@ document.addEventListener('DOMContentLoaded', () => {
   updatePenaltyHint();
 
   // ------------------------------------------
+  // 벌칙 선택 UI (타일 + 칩)
+  //  - 실제 값은 hidden input(selectPenaltyType / selectPenaltyDuration)에 반영한다.
+  //  - 기프티콘 벌칙은 준비 중이라 선택되지 않고 안내만 띄운다.
+  // ------------------------------------------
+  const penaltyTypeGridEl = document.getElementById('penaltyTypeGrid');
+  const penaltyDurChipsEl = document.getElementById('penaltyDurationChips');
+  const penaltyTypeValueEl = document.getElementById('selectPenaltyType');
+  const penaltyDurValueEl = document.getElementById('selectPenaltyDuration');
+
+  function markPenaltyChoice(containerEl, activeBtn, activeClass) {
+    if (!containerEl) return;
+    containerEl.querySelectorAll('[role="radio"]').forEach((btn) => {
+      const on = btn === activeBtn;
+      btn.classList.toggle(activeClass, on);
+      btn.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+  }
+
+  if (penaltyTypeGridEl) {
+    penaltyTypeGridEl.addEventListener('click', (e) => {
+      const tile = e.target.closest('.penalty-tile');
+      if (!tile) return;
+
+      if (tile.classList.contains('is-locked')) {
+        alert('🎁 기프티콘 벌칙은 아직 사용할 수 없습니다.\n\n준비 중인 기능이에요. 지금은 알람 또는 진동 벌칙을 선택해 주세요.');
+        return;
+      }
+
+      const type = tile.getAttribute('data-penalty') === 'vibrate' ? 'vibrate' : 'alarm';
+      if (penaltyTypeValueEl) penaltyTypeValueEl.value = type;
+      markPenaltyChoice(penaltyTypeGridEl, tile, 'is-active');
+      updatePenaltyHint();
+    });
+  }
+
+  if (penaltyDurChipsEl) {
+    penaltyDurChipsEl.addEventListener('click', (e) => {
+      const chip = e.target.closest('.penalty-chip');
+      if (!chip) return;
+      const min = parseInt(chip.getAttribute('data-min'), 10) || 0;
+      if (penaltyDurValueEl) penaltyDurValueEl.value = String(min);
+      markPenaltyChoice(penaltyDurChipsEl, chip, 'is-active');
+      updatePenaltyHint();
+    });
+  }
+
+  // ------------------------------------------
   // 약속 시작/종료 시간 입력 연동
   //  - 시작을 정하면 종료를 기본 +1시간으로 채운다.
   //  - 진행 시간 칩(30분/1시간/…)을 누르면 종료 시간을 계산해 넣는다.
@@ -3441,6 +3515,74 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 도착하면 지각 벌칙(알람/진동)을 즉시 중지
     evaluatePenaltyState();
+
+    // 도착 확인 창 (지각 창과 같은 형태, 오른쪽 위 X로 닫는다)
+    showArrivalOverlay(promiseObj);
+  }
+
+  // ------------------------------------------
+  // 도착! 전체 화면 알림
+  // ------------------------------------------
+  let arrivalOverlayEl = null;
+
+  function hideArrivalOverlay() {
+    if (arrivalOverlayEl) {
+      arrivalOverlayEl.remove();
+      arrivalOverlayEl = null;
+    }
+  }
+
+  function showArrivalOverlay(promiseObj) {
+    hideArrivalOverlay();
+
+    const place = (promiseObj && (promiseObj.venueName || promiseObj.location)) || '';
+    const lateMin = Math.max(0, Math.floor((Date.now() - Number(promiseObj.targetTimestamp || 0)) / 60000));
+    const onTime = Number.isFinite(Number(promiseObj.targetTimestamp))
+      ? Date.now() <= Number(promiseObj.targetTimestamp)
+      : true;
+
+    arrivalOverlayEl = document.createElement('div');
+    arrivalOverlayEl.id = 'arrivalAlertOverlay';
+    arrivalOverlayEl.className = 'arrival-overlay';
+    arrivalOverlayEl.setAttribute('role', 'alertdialog');
+    arrivalOverlayEl.setAttribute('aria-live', 'assertive');
+    arrivalOverlayEl.setAttribute('aria-label', '도착 알림');
+    arrivalOverlayEl.innerHTML = `
+      <div class="arrival-overlay-card">
+        <button type="button" class="penalty-overlay-close" id="btnArrivalOverlayClose" aria-label="도착 알림 창 닫기">
+          <i data-lucide="x"></i>
+        </button>
+
+        <div class="arrival-badge" aria-hidden="true">
+          <span class="arrival-ring"></span>
+          <span class="arrival-ring delay"></span>
+          <span class="arrival-check">✓</span>
+        </div>
+
+        <div class="arrival-text">도착!</div>
+        <div class="arrival-overlay-title">📍 ${escapeHtml(promiseObj.title || '약속')}</div>
+        <div class="arrival-overlay-desc">
+          ${place ? `${escapeHtml(place)}에 도착했습니다.<br>` : ''}
+          ${onTime ? '약속 시간 안에 도착했어요. 지각 벌칙 없음!' : `약속 시간에서 ${lateMin}분 지나 도착했습니다. 벌칙은 멈췄어요.`}
+        </div>
+
+        <div class="penalty-overlay-actions">
+          <button type="button" class="penalty-btn primary" id="btnArrivalOverlayOk">확인</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(arrivalOverlayEl);
+
+    if (window.lucide && typeof window.lucide.createIcons === 'function') {
+      try { window.lucide.createIcons(); } catch (e) {}
+    }
+
+    const closeBtn = document.getElementById('btnArrivalOverlayClose');
+    if (closeBtn) closeBtn.addEventListener('click', hideArrivalOverlay);
+    const okBtn = document.getElementById('btnArrivalOverlayOk');
+    if (okBtn) okBtn.addEventListener('click', hideArrivalOverlay);
+
+    if (navigator.vibrate) { try { navigator.vibrate([120, 80, 120]); } catch (e) {} }
   }
 
   // ==========================================
@@ -3547,19 +3689,27 @@ document.addEventListener('DOMContentLoaded', () => {
     const ctx = penaltyAudioCtx;
     const now = ctx.currentTime;
 
-    // 삐- 삐- 두 번 (알람 느낌)
-    [0, 0.35].forEach((offset) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(880, now + offset);
-      gain.gain.setValueAtTime(0.0001, now + offset);
-      gain.gain.exponentialRampToValueAtTime(0.25, now + offset + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.28);
-      osc.connect(gain).connect(ctx.destination);
-      osc.start(now + offset);
-      osc.stop(now + offset + 0.3);
-    });
+    // 사이렌: 낮은 음 → 높은 음 → 낮은 음으로 두 번 훑는다.
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sawtooth';
+
+    const step = 0.35;
+    osc.frequency.setValueAtTime(560, now);
+    for (let i = 0; i < 2; i += 1) {
+      const base = now + i * step * 2;
+      osc.frequency.linearRampToValueAtTime(1180, base + step);
+      osc.frequency.linearRampToValueAtTime(560, base + step * 2);
+    }
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.22, now + 0.05);
+    gain.gain.setValueAtTime(0.22, now + step * 4 - 0.1);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + step * 4);
+
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + step * 4 + 0.02);
   }
 
   function startPenaltyAlarm() {
@@ -3600,27 +3750,70 @@ document.addEventListener('DOMContentLoaded', () => {
       notice = '이 기기(브라우저)는 진동을 지원하지 않아 화면 경고만 표시됩니다.';
     } else if (!isVibrate && (!penaltyAudioCtx || penaltyAudioCtx.state !== 'running')) {
       needSoundBtn = true;
-      notice = '브라우저 정책상 화면을 한 번 눌러야 알람 소리가 시작됩니다.';
+      notice = '브라우저 정책상 화면을 한 번 눌러야 사이렌 소리가 시작됩니다.';
     }
 
     if (!penaltyBannerEl) {
       penaltyBannerEl = document.createElement('div');
-      penaltyBannerEl.id = 'penaltyBanner';
-      penaltyBannerEl.setAttribute('role', 'alert');
+      penaltyBannerEl.id = 'penaltyAlertOverlay';
+      penaltyBannerEl.className = 'penalty-overlay';
+      penaltyBannerEl.setAttribute('role', 'alertdialog');
       penaltyBannerEl.setAttribute('aria-live', 'assertive');
-      penaltyBannerEl.style.cssText = 'position:fixed; left:0; right:0; bottom:0; z-index:9999; background:var(--danger-strong); color: var(--text-main); padding:14px 16px calc(14px + env(safe-area-inset-bottom)); box-shadow:0 -6px 20px rgba(0,0,0,0.35);';
+      penaltyBannerEl.setAttribute('aria-label', '지각 벌칙 알림');
       document.body.appendChild(penaltyBannerEl);
     }
 
+    const durMin = Number(promiseObj.penaltyDurationMin) || 0;
+    const stopDesc = durMin > 0
+      ? `약속 시간 후 ${durMin}분간 울리며, 그 전에 도착하면 바로 멈춥니다.`
+      : '약속 장소 반경에 도착하면 자동으로 멈춥니다.';
+
+    // 이 함수는 매 초 호출된다. 같은 약속/같은 상태면 지난 시간 숫자만 갱신해
+    // 사이렌 애니메이션이 처음부터 다시 시작되지 않게 한다.
+    const stateKey = `${promiseObj.id}|${promiseObj.penaltyType}|${needSoundBtn ? 1 : 0}|${notice}`;
+    if (penaltyBannerEl.dataset.stateKey === stateKey) {
+      const lateEl = penaltyBannerEl.querySelector('#penaltyLateMinValue');
+      if (lateEl) lateEl.textContent = `${lateMin}분`;
+      return;
+    }
+    penaltyBannerEl.dataset.stateKey = stateKey;
+
     penaltyBannerEl.innerHTML = `
-      <div style="font-weight:800; font-size:0.92rem;">${isVibrate ? '📳' : '🔔'} 지각 벌칙 작동 중 - ${escapeHtml(promiseObj.title)}</div>
-      <div style="font-size:0.78rem; margin-top:4px; opacity:0.92;">약속 시간에서 ${lateMin}분 지났습니다. ${(Number(promiseObj.penaltyDurationMin) || 0) > 0 ? `약속 시간 후 ${Number(promiseObj.penaltyDurationMin)}분간 울리며, 그 전에 도착하면 바로 멈춥니다.` : '약속 장소 반경에 도착하면 자동으로 멈춥니다.'}</div>
-      ${notice ? `<div style="font-size:0.74rem; margin-top:4px; opacity:0.85;">${escapeHtml(notice)}</div>` : ''}
-      <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
-        ${needSoundBtn ? `<button type="button" id="btnPenaltyEnableSound" style="flex:1; min-width:110px; padding:9px 10px; border:0; border-radius:10px; background:#fff; color:var(--danger-strong); font-weight:800; cursor:pointer;">소리 켜기</button>` : ''}
-        <button type="button" id="btnPenaltySnooze" style="flex:1; min-width:110px; padding:9px 10px; border:1px solid rgba(255,255,255,0.6); border-radius:10px; background:transparent; color: var(--text-main); font-weight:700; cursor:pointer;">5분 미루기</button>
+      <div class="penalty-overlay-card">
+        <button type="button" class="penalty-overlay-close" id="btnPenaltyOverlayClose" aria-label="지각 알림 창 닫기">
+          <i data-lucide="x"></i>
+        </button>
+
+        <div class="penalty-siren" aria-hidden="true">
+          <span class="penalty-siren-ring"></span>
+          <span class="penalty-siren-ring delay"></span>
+          <span class="penalty-siren-beam"></span>
+          <span class="penalty-siren-body">
+            <span class="penalty-siren-lamp"></span>
+          </span>
+        </div>
+
+        <div class="penalty-late-text">지각!!</div>
+        <div class="penalty-overlay-title">${isVibrate ? '📳' : '🔔'} ${escapeHtml(promiseObj.title)}</div>
+        <div class="penalty-overlay-desc">약속 시간에서 <strong id="penaltyLateMinValue">${lateMin}분</strong> 지났습니다.<br>${stopDesc}</div>
+        ${notice ? `<div class="penalty-overlay-notice">${escapeHtml(notice)}</div>` : ''}
+
+        <div class="penalty-overlay-actions">
+          ${needSoundBtn ? '<button type="button" class="penalty-btn primary" id="btnPenaltyEnableSound">소리 켜기</button>' : ''}
+          <button type="button" class="penalty-btn" id="btnPenaltySnooze">5분 미루기</button>
+        </div>
       </div>
     `;
+
+    if (window.lucide && typeof window.lucide.createIcons === 'function') {
+      try { window.lucide.createIcons(); } catch (e) {}
+    }
+
+    const closeBtn = document.getElementById('btnPenaltyOverlayClose');
+    if (closeBtn) {
+      // 오른쪽 위 X: 창을 닫고 사이렌도 멈춘다. (5분 뒤 다시 확인)
+      closeBtn.addEventListener('click', () => snoozePenalty(promiseObj.id));
+    }
 
     const soundBtn = document.getElementById('btnPenaltyEnableSound');
     if (soundBtn) {

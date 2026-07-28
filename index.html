@@ -468,12 +468,26 @@
           <span style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">반경 이내 진입 시 자동 도착 처리됩니다. (추천: 200m)</span>
         </div>
 
-        <div class="input-group">
-          <label>약속 시작 시간</label>
-          <input type="datetime-local" id="inputPromiseTime" required>
+        <!-- 약속 시간 (독립 섹션) -->
+        <section class="form-section" id="sectionPromiseTime">
+          <div class="form-section-head">
+            <span class="form-section-icon"><i data-lucide="clock"></i></span>
+            <div class="form-section-title">
+              <strong>약속 시간</strong>
+              <span>시작과 종료 시간을 정해 주세요.</span>
+            </div>
+          </div>
 
-          <label style="margin-top:8px;">약속 종료 시간</label>
-          <input type="datetime-local" id="inputPromiseEndTime" required>
+          <div class="time-field-row">
+            <label for="inputPromiseTime">시작</label>
+            <input type="datetime-local" id="inputPromiseTime" required>
+          </div>
+          <div class="time-field-row">
+            <label for="inputPromiseEndTime">종료</label>
+            <input type="datetime-local" id="inputPromiseEndTime" required>
+          </div>
+
+          <span class="form-field-label">진행 시간 빠른 선택</span>
           <div class="duration-chips" id="promiseDurationChips" role="group" aria-label="약속 진행 시간 빠른 선택">
             <button type="button" class="duration-chip" data-min="30">30분</button>
             <button type="button" class="duration-chip" data-min="60">1시간</button>
@@ -481,8 +495,8 @@
             <button type="button" class="duration-chip" data-min="180">3시간</button>
             <button type="button" class="duration-chip" data-min="300">5시간</button>
           </div>
-          <span style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">종료 시간이 지나면 약속이 자동으로 완료 처리되고 캘린더에 기록됩니다.</span>
-        </div>
+          <span class="form-section-hint">종료 시간이 지나면 약속이 자동으로 완료 처리되고 캘린더에 기록됩니다.</span>
+        </section>
 
         <div class="input-group">
           <label>실시간 위치 공개 시점</label>
@@ -499,25 +513,53 @@
           <span style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">공개 시점 전에는 약속 장소만 보이고 참가자 위치·거리·GPS 상태는 숨겨집니다.</span>
         </div>
 
-        <div class="input-group">
-          <label>지각 벌칙 (약속 정각까지 안 온 사람)</label>
-          <select id="selectPenaltyType" class="status-select" style="padding:10px; font-size:0.85rem;">
-            <option value="alarm" selected>🔔 알람 벌칙 - 알람 소리</option>
-            <option value="vibrate">📳 진동 벌칙 - 진동</option>
-          </select>
+        <!-- 지각 벌칙 (독립 섹션) -->
+        <section class="form-section penalty-section" id="sectionPenalty">
+          <div class="form-section-head">
+            <span class="form-section-icon"><i data-lucide="alert-triangle"></i></span>
+            <div class="form-section-title">
+              <strong>지각 벌칙</strong>
+              <span>약속 정각까지 도착하지 않은 사람에게 적용됩니다.</span>
+            </div>
+          </div>
 
-          <label style="margin-top:8px;">벌칙 지속 시간</label>
-          <select id="selectPenaltyDuration" class="status-select" style="padding:10px; font-size:0.85rem;">
-            <option value="0" selected>도착할 때까지</option>
-            <option value="1">1분</option>
-            <option value="3">3분</option>
-            <option value="5">5분</option>
-            <option value="10">10분</option>
-            <option value="30">30분</option>
-            <option value="60">60분</option>
-          </select>
-          <span id="penaltyHintText" style="font-size:0.72rem; color: var(--text-muted); margin-top:2px;">약속 시간이 지나면 아직 도착하지 않은 참가자 기기에서 알람이 울립니다. 도착하면 즉시 멈춥니다.</span>
-        </div>
+          <span class="form-field-label">벌칙 종류</span>
+          <div class="penalty-type-grid" id="penaltyTypeGrid" role="radiogroup" aria-label="벌칙 종류">
+            <button type="button" class="penalty-tile is-active" data-penalty="alarm" role="radio" aria-checked="true">
+              <span class="penalty-tile-emoji" aria-hidden="true">🔔</span>
+              <strong>알람</strong>
+              <span class="penalty-tile-desc">알람 소리 반복</span>
+            </button>
+            <button type="button" class="penalty-tile" data-penalty="vibrate" role="radio" aria-checked="false">
+              <span class="penalty-tile-emoji" aria-hidden="true">📳</span>
+              <strong>진동</strong>
+              <span class="penalty-tile-desc">기기 진동 반복</span>
+            </button>
+            <button type="button" class="penalty-tile is-locked" data-penalty="gifticon" role="radio" aria-checked="false" aria-disabled="true">
+              <span class="penalty-tile-emoji" aria-hidden="true">🎁</span>
+              <strong>기프티콘</strong>
+              <span class="penalty-tile-desc">준비 중</span>
+              <span class="penalty-tile-lock" aria-hidden="true"><i data-lucide="lock"></i></span>
+            </button>
+          </div>
+
+          <span class="form-field-label">벌칙 지속 시간</span>
+          <div class="penalty-dur-chips" id="penaltyDurationChips" role="radiogroup" aria-label="벌칙 지속 시간">
+            <button type="button" class="penalty-chip is-active" data-min="0" role="radio" aria-checked="true">도착할 때까지</button>
+            <button type="button" class="penalty-chip" data-min="1" role="radio" aria-checked="false">1분</button>
+            <button type="button" class="penalty-chip" data-min="3" role="radio" aria-checked="false">3분</button>
+            <button type="button" class="penalty-chip" data-min="5" role="radio" aria-checked="false">5분</button>
+            <button type="button" class="penalty-chip" data-min="10" role="radio" aria-checked="false">10분</button>
+            <button type="button" class="penalty-chip" data-min="30" role="radio" aria-checked="false">30분</button>
+            <button type="button" class="penalty-chip" data-min="60" role="radio" aria-checked="false">60분</button>
+          </div>
+
+          <span id="penaltyHintText" class="form-section-hint">약속 시간이 지나면 아직 도착하지 않은 참가자 기기에서 알람이 울립니다. 도착하면 즉시 멈춥니다.</span>
+
+          <!-- 실제 제출 값 (기존 로직 호환) -->
+          <input type="hidden" id="selectPenaltyType" value="alarm">
+          <input type="hidden" id="selectPenaltyDuration" value="0">
+        </section>
 
         <div class="input-group">
           <label>참가 친구 선택</label>
