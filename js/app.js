@@ -5,6 +5,15 @@
 
 const DEFAULT_AVATAR = 'images/default_profile.jpg';
 
+// 기프티콘 AI 검증용 Gemini API 키 (앱 기본값)
+//  ⚠️ 배포된 JS 에 그대로 노출되므로 반드시 Google Cloud 콘솔에서
+//     - 애플리케이션 제한: HTTP 리퍼러 → https://promise-alarm-app.web.app/*
+//     - API 제한: Generative Language API 만 허용
+//     - 할당량(분당/일일 요청 수) 상한
+//     을 걸어 둘 것. 사용자가 직접 키를 넣고 싶으면 localStorage 의
+//     pa_gemini_key 값이 이 기본값을 덮어쓴다.
+const DEFAULT_GEMINI_API_KEY = '';
+
 // Firebase Config (Auth + Realtime DB)
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyDoE4PJ7auGCWdd90fUySSoZ9U5NoX4nys",
@@ -3603,12 +3612,6 @@ document.addEventListener('DOMContentLoaded', () => {
   function showArrivalOverlay(promiseObj) {
     hideArrivalOverlay();
 
-    const place = (promiseObj && (promiseObj.venueName || promiseObj.location)) || '';
-    const lateMin = Math.max(0, Math.floor((Date.now() - Number(promiseObj.targetTimestamp || 0)) / 60000));
-    const onTime = Number.isFinite(Number(promiseObj.targetTimestamp))
-      ? Date.now() <= Number(promiseObj.targetTimestamp)
-      : true;
-
     arrivalOverlayEl = document.createElement('div');
     arrivalOverlayEl.id = 'arrivalAlertOverlay';
     arrivalOverlayEl.className = 'arrival-overlay';
@@ -3628,15 +3631,6 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
 
         <div class="arrival-text">도착!</div>
-        <div class="arrival-overlay-title">📍 ${escapeHtml(promiseObj.title || '약속')}</div>
-        <div class="arrival-overlay-desc">
-          ${place ? `${escapeHtml(place)}에 도착했습니다.<br>` : ''}
-          ${onTime ? '약속 시간 안에 도착했어요. 지각 벌칙 없음!' : `약속 시간에서 ${lateMin}분 지나 도착했습니다. 벌칙은 멈췄어요.`}
-        </div>
-
-        <div class="penalty-overlay-actions">
-          <button type="button" class="penalty-btn primary" id="btnArrivalOverlayOk">확인</button>
-        </div>
       </div>
     `;
     document.body.appendChild(arrivalOverlayEl);
@@ -3647,8 +3641,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const closeBtn = document.getElementById('btnArrivalOverlayClose');
     if (closeBtn) closeBtn.addEventListener('click', hideArrivalOverlay);
-    const okBtn = document.getElementById('btnArrivalOverlayOk');
-    if (okBtn) okBtn.addEventListener('click', hideArrivalOverlay);
 
     if (navigator.vibrate) { try { navigator.vibrate([120, 80, 120]); } catch (e) {} }
   }
@@ -3707,17 +3699,11 @@ document.addEventListener('DOMContentLoaded', () => {
   let gifticonRevealNotified = loadStorage('pa_gifticon_reveal_notified', []);
   const gifticonRevealPending = [];        // 공개 요청이 진행 중인 약속 id
 
-  function geminiApiKey(askIfMissing) {
-    let key = '';
-    try { key = localStorage.getItem('pa_gemini_key') || ''; } catch (e) { key = ''; }
-    if (!key && askIfMissing) {
-      const input = prompt('🤖 기프티콘 진위 확인에 사용할 Google AI Studio(Gemini) API 키를 입력해 주세요.\n\nhttps://aistudio.google.com/apikey 에서 무료로 발급할 수 있습니다.\n비워두면 AI 검증 없이 자동 코드 인식만 사용합니다.');
-      if (input && input.trim()) {
-        key = input.trim();
-        try { localStorage.setItem('pa_gemini_key', key); } catch (e) {}
-      }
-    }
-    return key;
+  // 사용자에게 키를 묻지 않는다. 앱 기본 키를 쓰고, 개인 키가 저장돼 있으면 그것을 우선한다.
+  function geminiApiKey() {
+    let saved = '';
+    try { saved = localStorage.getItem('pa_gemini_key') || ''; } catch (e) { saved = ''; }
+    return (saved || DEFAULT_GEMINI_API_KEY || '').trim();
   }
 
   // 업로드 이미지를 적당한 크기의 JPEG 로 줄인다. (DB 용량 절약)
@@ -3810,17 +3796,29 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function verifyGifticonWithAI(dataUrl) {
-    const key = geminiApiKey(true);
-    if (!key) return null;
-
     const base64 = String(dataUrl).split(',')[1] || '';
     const mime = (String(dataUrl).match(/^data:(.*?);/) || [])[1] || 'image/jpeg';
+
+    // 1순위: 서버 함수(키가 서버에만 있음)
+    try {
+      const out = await callFunction('verifyGifticonImage', { imageBase64: base64, mimeType: mime });
+      if (out) return out;
+    } catch (e) {
+      console.warn('[기프티콘] 서버 AI 검증 실패:', e && e.message ? e.message : e);
+      if (!geminiApiKey()) throw e;   // 개인 키도 없으면 그대로 알린다
+    }
+
+    // 2순위: 브라우저에 저장된 개인 키로 직접 호출
+    const key = geminiApiKey();
+    if (!key) return null;
+
+    const today = new Date().toISOString().slice(0, 10);
     const promptText = [
       '이 이미지가 실제 사용 가능한 모바일 상품권(기프티콘) 캡처인지 판정해라.',
       '판정 기준: 브랜드/상품명, 유효기간, 교환용 바코드 또는 QR 코드가 함께 보이면 기프티콘이다.',
       '단순 상품 사진, 스크린샷이 아닌 합성/그림, 코드가 없는 이미지는 기프티콘이 아니다.',
       '"사용완료", "사용됨", "USED", "교환완료", "기간만료" 같은 도장/워터마크/문구가 보이면 used=true 로 판정해라.',
-      '유효기간이 오늘보다 과거면 expired=true 로 판정해라. 오늘 날짜는 ' + new Date().toISOString().slice(0, 10) + ' 이다.',
+      '유효기간이 오늘보다 과거면 expired=true 로 판정해라. 오늘 날짜는 ' + today + ' 이다.',
       '교환번호(PIN, 바코드 아래 숫자)를 읽을 수 있으면 숫자/영문만 남겨 pin 에 넣어라. 못 읽으면 빈 문자열.',
       '바코드/QR 코드 영역의 위치를 이미지 크기에 대한 0~1 비율로 알려줘라.',
       'JSON 만 출력: {"isGifticon":true/false,"used":true/false,"expired":true/false,"confidence":0~1,"brand":"","item":"","expiry":"","pin":"","codeType":"barcode|qr|none","codeBox":{"x":0,"y":0,"w":0,"h":0},"reason":""}',

@@ -89,6 +89,11 @@
       ".write": false
     },
 
+    "ai_usage": {
+      ".read": false,
+      ".write": false
+    },
+
     "user_promises": {      "$uid": {
         ".read": "auth != null && auth.uid === $uid",
         "$promiseId": {

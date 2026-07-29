@@ -1335,21 +1335,6 @@ html[data-theme='dark'] {
   to { opacity: 1; transform: none; }
 }
 
-.arrival-overlay-title {
-  margin-top: 8px;
-  font-size: 0.98rem;
-  font-weight: 800;
-  color: #f5f5f7;
-  word-break: keep-all;
-}
-
-.arrival-overlay-desc {
-  margin-top: 8px;
-  font-size: 0.8rem;
-  line-height: 1.5;
-  color: rgba(245, 245, 247, 0.78);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .arrival-ring,
   .arrival-check,

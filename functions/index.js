@@ -122,6 +122,84 @@ async function requireMember(promiseId, uid) {
 }
 
 // ------------------------------------------------------------------
+// 0) 기프티콘 이미지 AI 검증 (Gemini 프록시)
+//    - Gemini 키를 서버에만 두어 클라이언트에 노출되지 않게 한다.
+//    - functions/.env 에 GEMINI_API_KEY 를 넣으면 활성화된다.
+//    - 남용을 막기 위해 사용자당 하루 호출 수를 제한한다.
+// ------------------------------------------------------------------
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const DAILY_LIMIT_PER_USER = Number(process.env.GEMINI_DAILY_LIMIT || 40);
+
+async function consumeDailyQuota(uid) {
+  const day = new Date().toISOString().slice(0, 10);
+  const ref = db.ref(`ai_usage/${day}/${uid}`);
+  const res = await ref.transaction((cur) => (Number(cur) || 0) + 1);
+  const used = res.snapshot.val() || 0;
+  if (used > DAILY_LIMIT_PER_USER) {
+    throw new functions.https.HttpsError('resource-exhausted', `하루 검증 횟수(${DAILY_LIMIT_PER_USER}회)를 초과했습니다.`);
+  }
+}
+
+exports.verifyGifticonImage = functions
+  .region(REGION)
+  .runWith({ timeoutSeconds: 60, memory: '512MB' })
+  .https.onCall(async (data, context) => {
+    const uid = context.auth && context.auth.uid;
+    if (!uid) throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
+
+    const key = process.env.GEMINI_API_KEY;
+    if (!key) throw new functions.https.HttpsError('failed-precondition', '서버에 AI 키가 설정되지 않았습니다.');
+
+    const imageBase64 = data && data.imageBase64;
+    const mimeType = (data && data.mimeType) || 'image/jpeg';
+    if (typeof imageBase64 !== 'string' || imageBase64.length < 100) {
+      throw new functions.https.HttpsError('invalid-argument', '이미지 데이터가 올바르지 않습니다.');
+    }
+    if (imageBase64.length > 4 * 1024 * 1024) {
+      throw new functions.https.HttpsError('invalid-argument', '이미지가 너무 큽니다. (4MB 제한)');
+    }
+
+    await consumeDailyQuota(uid);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const promptText = [
+      '이 이미지가 실제 사용 가능한 모바일 상품권(기프티콘) 캡처인지 판정해라.',
+      '판정 기준: 브랜드/상품명, 유효기간, 교환용 바코드 또는 QR 코드가 함께 보이면 기프티콘이다.',
+      '단순 상품 사진, 스크린샷이 아닌 합성/그림, 코드가 없는 이미지는 기프티콘이 아니다.',
+      '"사용완료", "사용됨", "USED", "교환완료", "기간만료" 같은 도장/워터마크/문구가 보이면 used=true 로 판정해라.',
+      `유효기간이 오늘보다 과거면 expired=true 로 판정해라. 오늘 날짜는 ${today} 이다.`,
+      '교환번호(PIN, 바코드 아래 숫자)를 읽을 수 있으면 숫자/영문만 남겨 pin 에 넣어라. 못 읽으면 빈 문자열.',
+      '바코드/QR 코드 영역의 위치를 이미지 크기에 대한 0~1 비율로 알려줘라.',
+      'JSON 만 출력: {"isGifticon":true/false,"used":true/false,"expired":true/false,"confidence":0~1,"brand":"","item":"","expiry":"","pin":"","codeType":"barcode|qr|none","codeBox":{"x":0,"y":0,"w":0,"h":0},"reason":""}',
+    ].join('\n');
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(key)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: promptText }, { inline_data: { mime_type: mimeType, data: imageBase64 } }] }],
+          generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+        }),
+      }
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new functions.https.HttpsError('internal', `AI 검증 실패 (${res.status}) ${body.slice(0, 200)}`);
+    }
+    const json = await res.json();
+    const parts = (((json.candidates || [])[0] || {}).content || {}).parts || [];
+    const raw = parts.map((p) => p.text || '').join('').replace(/```json|```/g, '').trim();
+
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      throw new functions.https.HttpsError('internal', 'AI 응답을 해석할 수 없습니다.');
+    }
+  });
+
+// ------------------------------------------------------------------
 // 1) 실시간 PIN 조회
 // ------------------------------------------------------------------
 exports.verifyGifticon = functions

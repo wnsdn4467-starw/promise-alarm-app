@@ -1,5 +1,6 @@
 node_modules/
 .firebase/
+functions/.env
 native/android/build/
 native/android/app/build/
 native/android/.gradle/
